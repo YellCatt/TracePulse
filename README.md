@@ -507,7 +507,9 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o tracepulse.exe
 CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o tracepulse-macos
 ```
 
-仓库自带 GitHub Actions，推送到 `main` 会自动构建 6 个平台的产物（Linux amd64 / arm64 / armv7、Windows amd64、macOS amd64 / arm64），打包后发布到 `dev-latest` 预发布版本。
+仓库自带 GitHub Actions，推送到 `main` 会自动构建 7 个平台的产物（Linux amd64 / arm64 / armv7 / mipsle、Windows amd64、macOS amd64 / arm64），打包后发布到 `dev-latest` 预发布版本。
+
+其中 `linux/mipsle` 走独立的 `build-mips` 任务：GitHub 没有 MIPS 架构的托管 runner，所以不换机器而是在 x86_64 runner 上跑 musl 交叉工具链，开 CGO 静态链接出包，极路由可直接下载使用。
 
 ### MIPS 路由器（极路由等）
 
