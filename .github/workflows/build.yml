@@ -4,6 +4,24 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
+    inputs:
+      upx:
+        description: '是否使用 UPX 压缩产物'
+        type: boolean
+        default: true
+      upx_level:
+        description: 'UPX 压缩参数（越高压缩率越好、耗时越久）'
+        type: choice
+        default: '--best --lzma'
+        options:
+          - '--best --lzma'
+          - '--lzma'
+          - '-9'
+          - '-1'
+
+env:
+  # UPX 发行版版本，升级时只需改这里
+  UPX_VERSION: '4.2.4'
 
 jobs:
   build:
@@ -34,6 +52,16 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version: '1.24'
+
+    - name: Install UPX
+      run: |
+        set -e
+        curl -fsSL --retry 3 -o upx.tar.xz \
+          "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-amd64_linux.tar.xz"
+        tar -xJf upx.tar.xz
+        sudo install -m 0755 "upx-${UPX_VERSION}-amd64_linux/upx" /usr/local/bin/upx
+        rm -rf upx.tar.xz "upx-${UPX_VERSION}-amd64_linux"
+        upx --version
 
     # MT7620A 是 24Kc 无 FPU，必须用 soft-float ABI 的 musl 工具链，
     # OpenWrt SDK 自带的 toolchain 正好是 mipsel_24kc + musl + soft-float。
@@ -88,6 +116,25 @@ jobs:
         ${{ matrix.target.goflags }} go build -tags netgo -ldflags="${{ matrix.target.ldflags }}" -o "$OUTPUT_FILE"
         ls -la tracepulse_*
         file "$OUTPUT_FILE" || true
+
+    # UPX 并非支持所有目标格式（某些 mips 变体不支持），
+    # 因此压缩失败或自检（-t）失败时回滚到未压缩产物，不阻断构建。
+    # 注意：Windows 平台 UPX 加壳可能触发杀软误报，可手动触发时用 upx=false 关闭。
+    - name: Compress binary with UPX
+      if: ${{ github.event.inputs.upx != 'false' }}
+      run: |
+        set -u
+        BIN="tracepulse_${{ matrix.target.suffix }}${{ matrix.target.os == 'windows' && '.exe' || '' }}"
+        cp -f "$BIN" "${BIN}.bak"
+        SIZE_BEFORE=$(stat -c%s "$BIN")
+        if upx ${{ github.event.inputs.upx_level || '--best --lzma' }} "$BIN" && upx -t "$BIN"; then
+          SIZE_AFTER=$(stat -c%s "$BIN")
+          echo "UPX done: $SIZE_BEFORE -> $SIZE_AFTER bytes"
+          rm -f "${BIN}.bak"
+        else
+          echo "::warning::UPX 压缩或自检失败，保留未压缩二进制"
+          mv -f "${BIN}.bak" "$BIN"
+        fi
 
     - name: Package release
       run: |

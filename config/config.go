@@ -102,7 +102,7 @@ type AlertConfig struct {
 	Recipients []string `yaml:"recipients"`
 	// Triggers 触发告警的条件，可选值：error / warn / timeout / queue_drop。
 	Triggers []string `yaml:"triggers"`
-	// PublicURL 告警邮件中「查看详情」链接的 base URL，例如 http://1.2.3.4:8084。
+	// PublicURL 告警邮件中「查看详情」链接的 base URL，例如 http://1.2.3.4:8086。
 	PublicURL string `yaml:"public_url"`
 
 	// SlowThresholdMs 慢调用阈值（毫秒）。triggers 含 slow 时，链路耗时超过该值即告警。
@@ -155,7 +155,7 @@ func LoadConfig() {
 func defaultConfig() Config {
 	return Config{
 		Server: ServerConfig{
-			Port:                   8084,
+			Port:                   8086,
 			ReadTimeoutSeconds:     30,
 			WriteTimeoutSeconds:    60,
 			ShutdownTimeoutSeconds: 20,
@@ -193,7 +193,7 @@ func defaultConfig() Config {
 			StartTLS:           true,
 			Recipients:         []string{"admin@example.com"},
 			Triggers:           []string{"error", "warn", "timeout", "queue_drop"},
-			PublicURL:          "http://localhost:8084",
+			PublicURL:          "http://localhost:8086",
 			TimeoutSeconds:     15,
 			DedupSeconds:       intPtr(300),
 			MinIntervalSeconds: 60,
