@@ -6,7 +6,8 @@ BINARY_NAME="tracepulse"
 TMP_NAME="tracepulse.tmp"
 TMP_ARCHIVE="tracepulse.tmp.tar.gz"
 EXTRACT_DIR="$PLUGIN_DIR/.extract"
-LOG_FILE="$PLUGIN_DIR/logs/tracepulse.log"
+LOG_DIR="$PLUGIN_DIR/logs"
+LOG_FILE="$LOG_DIR/tracepulse.log"
 PID_FILE="$PLUGIN_DIR/tracepulse.pid"
 DOWNLOAD_URL="https://github.com/YellCatt/TracePulse/releases/download/dev-latest/tracepulse_linux_mipsle.tar.gz"
 
@@ -20,8 +21,18 @@ GRACEFUL_SHUTDOWN_TIMEOUT=10
 CONNECT_TIMEOUT=120
 MAX_DOWNLOAD_TIME=1200
 
-# 预创建目录，确保早期日志能写入
-mkdir -p "$PLUGIN_DIR" 2>/dev/null
+# 预创建目录（含日志目录），确保早期日志能写入
+mkdir -p "$LOG_DIR" 2>/dev/null
+
+# 插件目录不可写时退到 /tmp，保证脚本仍能启动并留下可排查的日志
+if [ ! -d "$LOG_DIR" ]; then
+    PLUGIN_DIR="/tmp/tracepulse"
+    LOG_DIR="$PLUGIN_DIR/logs"
+    LOG_FILE="$LOG_DIR/tracepulse.log"
+    PID_FILE="$PLUGIN_DIR/tracepulse.pid"
+    EXTRACT_DIR="$PLUGIN_DIR/.extract"
+    mkdir -p "$LOG_DIR" 2>/dev/null
+fi
 
 # ============ 全局状态 ============
 CHILD_PID=""
@@ -31,6 +42,8 @@ CURRENT_DELAY=$RESTART_DELAY
 
 # ============ 日志函数 ============
 log() {
+    # 目录被误删时自愈，避免重定向失败导致后续日志全丢
+    [ -d "$LOG_DIR" ] || mkdir -p "$LOG_DIR" 2>/dev/null
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
 }
 
@@ -121,6 +134,21 @@ if [ ! -d "$PLUGIN_DIR" ]; then
     fi
 else
     log_ok "目录已存在: $PLUGIN_DIR"
+fi
+
+# ============ 检查并创建日志目录 ============
+# 日志目录独立于插件目录，缺失时 >> 重定向会直接失败，程序根本起不来
+log_step "检查日志目录..."
+if [ ! -d "$LOG_DIR" ]; then
+    log_info "日志目录不存在，正在创建: $LOG_DIR"
+    if mkdir -p "$LOG_DIR"; then
+        log_ok "日志目录创建成功"
+    else
+        log_error "日志目录创建失败，退出"
+        exit 1
+    fi
+else
+    log_ok "日志目录已存在: $LOG_DIR"
 fi
 
 # ============ 进入插件目录 ============
@@ -256,6 +284,9 @@ start_program() {
         log_error "二进制文件不存在，无法启动"
         return 1
     fi
+
+    # 日志目录缺失会让 >> 重定向失败，进程根本不会被拉起，这里兜底补建
+    [ -d "$LOG_DIR" ] || mkdir -p "$LOG_DIR" 2>/dev/null
 
     "./$BINARY_NAME" >> "$LOG_FILE" 2>&1 &
     CHILD_PID=$!
