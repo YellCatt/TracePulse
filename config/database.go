@@ -16,7 +16,11 @@ import (
 // NewDatabase 打开 SQLite 并建表建索引。
 //
 // 使用 github.com/glebarez/sqlite（底层 modernc.org/sqlite，纯 Go 无 CGO），
-// 因此可以 CGO_ENABLED=0 交叉编译出单文件静态二进制，直接丢到极路由上跑。
+// 因此可以 CGO_ENABLED=0 交叉编译出单文件静态二进制。
+//
+// 注意：modernc.org/libc 未提供 MIPS 实现，无法构建 linux/mipsle。
+// 要跑在 MIPS 架构的路由器上，必须改用 CGO 版驱动（mattn/go-sqlite3 +
+// gorm.io/driver/sqlite）并配合对应 SDK 工具链。
 func NewDatabase() *gorm.DB {
 	db, err := gorm.Open(sqlite.Open(cfg.Database.Path), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),

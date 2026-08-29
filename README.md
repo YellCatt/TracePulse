@@ -505,7 +505,9 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o tracepulse.exe
 CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o tracepulse-macos
 ```
 
-仓库自带 GitHub Actions，推送到 `main` 会自动构建 Linux mipsle（OpenWrt/musl 静态链接）与 Windows amd64 产物，并发布到 `dev-latest` 预发布版本。
+仓库自带 GitHub Actions，推送到 `main` 会自动构建 6 个平台的产物（Linux amd64 / arm64 / armv7、Windows amd64、macOS amd64 / arm64），打包后发布到 `dev-latest` 预发布版本。
+
+> **注意**：`modernc.org/libc` 未提供 MIPS 实现，因此**无法**构建 `linux/mipsle`。若需要在 MIPS 架构的 OpenWrt 路由器上运行，必须改用 CGO 版驱动（`mattn/go-sqlite3` + `gorm.io/driver/sqlite`）并配合 OpenWrt SDK 工具链编译。
 
 ## 优雅关闭
 
