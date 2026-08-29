@@ -29,12 +29,12 @@ type NetworkStatus struct {
 
 // DiskStatus 单个磁盘/分区的状态信息，含容量及读写速率。
 type DiskStatus struct {
-	Mountpoint string  `json:"mountpoint"` // 挂载点/盘符
-	Total      float64 `json:"total"`      // 磁盘总量（KB）
-	Used       float64 `json:"used"`       // 已用空间（KB）
-	Free       float64 `json:"free"`       // 剩余空间（KB）
-	Usage      float64 `json:"usage"`      // 磁盘使用率（百分比）
-	ReadSpeed  float64 `json:"read_speed"` // 读取速率（KB/s）
+	Mountpoint string  `json:"mountpoint"`  // 挂载点/盘符
+	Total      float64 `json:"total"`       // 磁盘总量（KB）
+	Used       float64 `json:"used"`        // 已用空间（KB）
+	Free       float64 `json:"free"`        // 剩余空间（KB）
+	Usage      float64 `json:"usage"`       // 磁盘使用率（百分比）
+	ReadSpeed  float64 `json:"read_speed"`  // 读取速率（KB/s）
 	WriteSpeed float64 `json:"write_speed"` // 写入速率（KB/s）
 }
 

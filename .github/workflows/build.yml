@@ -63,27 +63,27 @@ jobs:
 
     - name: Build for ${{ matrix.target.os }}/${{ matrix.target.arch }}
       run: |
-        OUTPUT_FILE="gapi_${{ matrix.target.suffix }}${{ matrix.target.os == 'windows' && '.exe' || '' }}"
+        OUTPUT_FILE="tracepulse_${{ matrix.target.suffix }}${{ matrix.target.os == 'windows' && '.exe' || '' }}"
         ${{ matrix.target.goflags }} go build -tags netgo -ldflags="${{ matrix.target.ldflags }}" -o "$OUTPUT_FILE"
-        ls -la gapi_*
+        ls -la tracepulse_*
         file "$OUTPUT_FILE" || true
 
     - name: Package release
       run: |
         mkdir -p release
         if [ "${{ matrix.target.os }}" = "windows" ]; then
-          mv gapi_${{ matrix.target.suffix }}.exe release/
+          mv tracepulse_${{ matrix.target.suffix }}.exe release/
         else
-          mv gapi_${{ matrix.target.suffix }} release/
+          mv tracepulse_${{ matrix.target.suffix }} release/
         fi
         ls -la release/
-        tar -czf gapi_${{ matrix.target.suffix }}.tar.gz release/
+        tar -czf tracepulse_${{ matrix.target.suffix }}.tar.gz release/
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: gapi_${{ matrix.target.suffix }}
-        path: gapi_${{ matrix.target.suffix }}.tar.gz
+        name: tracepulse_${{ matrix.target.suffix }}
+        path: tracepulse_${{ matrix.target.suffix }}.tar.gz
 
   release:
     needs: build

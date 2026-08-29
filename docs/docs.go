@@ -7,8 +7,8 @@ import "github.com/swaggo/swag"
 const docTemplate = `{
   "swagger": "2.0",
   "info": {
-    "description": "GAPI - Go API Service",
-    "title": "GAPI",
+    "description": "TracePulse - Go API Service",
+    "title": "TracePulse",
     "contact": {},
     "version": "1.0"
   },
@@ -169,8 +169,8 @@ func init() {
 		Host:             "localhost:8084",
 		BasePath:         "/",
 		Schemes:          []string{"http"},
-		Title:            "GAPI",
-		Description:      "GAPI - Go API Service",
+		Title:            "TracePulse",
+		Description:      "TracePulse - Go API Service",
 		InfoInstanceName: "swagger",
 		SwaggerTemplate:  docTemplate,
 	})

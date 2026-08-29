@@ -41,18 +41,23 @@ func FormatMinute(t time.Time) string {
 }
 
 // FormatDuration 把毫秒渲染成人类可读耗时。
+//
+// 全程整数运算、向下截断，不用浮点格式化：浮点四舍五入会把 59999ms 显示成
+// "60.00s"、把 119999ms 显示成 "2m0.0s"，看起来像跨了一档，排查时极易误判。
 func FormatDuration(ms int64) string {
 	switch {
 	case ms < 0:
 		return "-"
-	case ms < 1000:
+	case ms < 1_000:
 		return fmt.Sprintf("%dms", ms)
 	case ms < 60_000:
-		return fmt.Sprintf("%.2fs", float64(ms)/1000)
+		return fmt.Sprintf("%d.%02ds", ms/1_000, (ms%1_000)/10)
 	case ms < 3_600_000:
-		return fmt.Sprintf("%dm%.1fs", ms/60_000, float64(ms%60_000)/1000)
+		rem := ms % 60_000
+		return fmt.Sprintf("%dm%d.%ds", ms/60_000, rem/1_000, (rem%1_000)/100)
 	default:
-		return fmt.Sprintf("%dh%.1fm", ms/3_600_000, float64(ms%3_600_000)/60_000)
+		rem := ms % 3_600_000
+		return fmt.Sprintf("%dh%d.%dm", ms/3_600_000, rem/60_000, (rem%60_000)/6_000)
 	}
 }
 

@@ -1,4 +1,4 @@
-// Package main 是 GAPI / TracePulse 服务的入口，负责组装各层组件并启动 HTTP 服务器。
+// Package main 是 TracePulse 服务的入口，负责组装各层组件并启动 HTTP 服务器。
 package main
 
 import (
@@ -12,12 +12,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/example/gapi/config"
-	"github.com/example/gapi/controller"
-	"github.com/example/gapi/logger"
-	"github.com/example/gapi/repository"
-	"github.com/example/gapi/router"
-	"github.com/example/gapi/service"
+	"github.com/example/tracepulse/config"
+	"github.com/example/tracepulse/controller"
+	"github.com/example/tracepulse/logger"
+	"github.com/example/tracepulse/repository"
+	"github.com/example/tracepulse/router"
+	"github.com/example/tracepulse/service"
 
 	"go.uber.org/zap"
 )

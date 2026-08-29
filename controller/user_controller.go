@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/example/gapi/model"
-	"github.com/example/gapi/service"
+	"github.com/example/tracepulse/model"
+	"github.com/example/tracepulse/service"
 )
 
 // UserController 用户相关的 HTTP 请求处理器。

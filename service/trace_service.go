@@ -23,10 +23,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/example/gapi/config"
-	"github.com/example/gapi/logger"
-	"github.com/example/gapi/model"
-	"github.com/example/gapi/repository"
+	"github.com/example/tracepulse/config"
+	"github.com/example/tracepulse/logger"
+	"github.com/example/tracepulse/model"
+	"github.com/example/tracepulse/repository"
 	"go.uber.org/zap"
 )
 
@@ -48,6 +48,12 @@ type TraceStats struct {
 	FlushedTotal int64 `json:"flushed_total"`
 	ShuttingDown bool  `json:"shutting_down"`
 }
+
+// orphanGracePeriod 孤儿事件清理的并发安全窗口。
+//
+// 落盘顺序是"先建 trace 再插事件"，清理任务若正好卡在这两步之间，会把刚要写入的
+// 事件误判成孤儿。留出足够宽限期（远大于单次 flush 耗时）即可规避。
+const orphanGracePeriod = 10 * time.Minute
 
 // activeTrace 内存中尚未落盘的一条链路。
 type activeTrace struct {
@@ -546,7 +552,7 @@ func (s *traceService) runCleanup() {
 	}
 
 	// 链路按 start_time 判过期，事件可能写入更晚，这一步清理残留孤儿。
-	orphanDeleted, err := s.repo.DeleteOrphanEventsBefore(cutoff)
+	orphanDeleted, err := s.repo.DeleteOrphanEvents(orphanGracePeriod)
 	if err != nil {
 		logger.Error("failed to cleanup orphan trace events", zap.Error(err))
 	}

@@ -2,8 +2,8 @@
 package service
 
 import (
-	"github.com/example/gapi/model"
-	"github.com/example/gapi/repository"
+	"github.com/example/tracepulse/model"
+	"github.com/example/tracepulse/repository"
 )
 
 // UserService 用户业务逻辑接口。

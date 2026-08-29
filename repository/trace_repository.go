@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/example/gapi/config"
-	"github.com/example/gapi/model"
+	"github.com/example/tracepulse/config"
+	"github.com/example/tracepulse/model"
 	"gorm.io/gorm"
 )
 
@@ -23,7 +23,7 @@ type TraceRepository interface {
 	CreateEvents(events []model.TraceEvent) error
 	GetEventsByTraceID(traceID string) ([]model.TraceEvent, error)
 	DeleteEventsBefore(cutoff time.Time) (int64, error)
-	DeleteOrphanEventsBefore(cutoff time.Time) (int64, error)
+	DeleteOrphanEvents(gracePeriod time.Duration) (int64, error)
 
 	Vacuum(deletedRows int64) error
 }
@@ -182,12 +182,19 @@ func (r *traceRepository) DeleteEventsBefore(cutoff time.Time) (int64, error) {
 	return result.RowsAffected, result.Error
 }
 
-// DeleteOrphanEventsBefore 清理父链路已被删除的孤儿事件。
+// DeleteOrphanEvents 清理父链路已不存在的孤儿事件。
 //
-// 场景：链路按 start_time 判定过期被删，但事件可能因为跨 TTL 分批落盘而写入时间
-// 更晚，此时单靠 created_at 清不干净，需要这一步兜底。
-func (r *traceRepository) DeleteOrphanEventsBefore(cutoff time.Time) (int64, error) {
-	result := r.db.Where("created_at < ?", cutoff).
+// 为什么按"无父链路"而不是按时间判定：链路是按 start_time 判过期删除的，但事件
+// 可能因为跨 TTL 分批落盘而写入得更晚，单靠 created_at 清不干净。孤儿事件既查不到
+// 又占空间，父链路没了它就是垃圾。
+//
+// gracePeriod 是并发安全窗口：落盘是先建 trace 再插事件，若清理恰好卡在这两步之间，
+// 会把刚要写入的事件误删。只清理宽限期之前创建的事件即可规避。
+func (r *traceRepository) DeleteOrphanEvents(gracePeriod time.Duration) (int64, error) {
+	if gracePeriod < 0 {
+		gracePeriod = 0
+	}
+	result := r.db.Where("created_at < ?", time.Now().Add(-gracePeriod)).
 		Where("trace_id NOT IN (?)", r.db.Model(&model.Trace{}).Select("trace_id")).
 		Delete(&model.TraceEvent{})
 	return result.RowsAffected, result.Error

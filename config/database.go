@@ -7,7 +7,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/example/gapi/model"
+	"github.com/example/tracepulse/model"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"

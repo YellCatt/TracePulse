@@ -4,7 +4,7 @@ package router
 import (
 	"net/http"
 
-	"github.com/example/gapi/controller"
+	"github.com/example/tracepulse/controller"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
 )
 
@@ -66,8 +66,8 @@ func NewRouter(
 const swaggerDoc = `{
   "swagger": "2.0",
   "info": {
-    "description": "GAPI - Go API Service / TracePulse",
-    "title": "GAPI",
+    "description": "TracePulse - Go API Service",
+    "title": "TracePulse",
     "contact": {},
     "version": "1.0"
   },

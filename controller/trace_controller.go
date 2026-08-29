@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/example/gapi/model"
-	"github.com/example/gapi/service"
-	"github.com/example/gapi/view"
+	"github.com/example/tracepulse/model"
+	"github.com/example/tracepulse/service"
+	"github.com/example/tracepulse/view"
 )
 
 // TraceController 链路相关的 HTTP handler，同时提供 JSON API 与内置 HTML 页面。

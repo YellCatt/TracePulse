@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/gapi/model"
+	"github.com/example/tracepulse/model"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/host"

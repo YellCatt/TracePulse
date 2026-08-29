@@ -25,10 +25,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/gapi/config"
-	"github.com/example/gapi/logger"
-	"github.com/example/gapi/model"
-	"github.com/example/gapi/view"
+	"github.com/example/tracepulse/config"
+	"github.com/example/tracepulse/logger"
+	"github.com/example/tracepulse/model"
+	"github.com/example/tracepulse/view"
 	"go.uber.org/zap"
 )
 
@@ -54,14 +54,21 @@ const (
 )
 
 type alertJob struct {
-	kind      string
-	trace     *model.Trace
-	events    []model.TraceEvent
+	kind  string
+	trace *model.Trace
+	// events 是本次要渲染的事件；omitted 是被截断掉、没放进来的条数。
+	// 两者分开保存，邮件里才能如实告诉阅读者"还省略了多少条"。
+	events  []model.TraceEvent
+	omitted int
+
 	dropCount int
 }
 
 type alertService struct {
 	cfg config.AlertConfig
+
+	// sender 发信实现。默认走 SMTP，测试可替换为录制桩，避免依赖真实邮件服务器。
+	sender func(cfg config.AlertConfig, subject, htmlBody, textBody string) error
 
 	jobs     chan alertJob
 	quit     chan struct{}
@@ -79,10 +86,11 @@ func NewAlertService(cfg config.AlertConfig) AlertService {
 		cfg.QueueSize = 256
 	}
 	s := &alertService{
-		cfg:   cfg,
-		jobs:  make(chan alertJob, cfg.QueueSize),
-		quit:  make(chan struct{}),
-		dedup: make(map[string]time.Time),
+		cfg:    cfg,
+		sender: sendMailViaSMTP,
+		jobs:   make(chan alertJob, cfg.QueueSize),
+		quit:   make(chan struct{}),
+		dedup:  make(map[string]time.Time),
 	}
 
 	s.wg.Add(1)
@@ -112,6 +120,7 @@ func (s *alertService) AlertOnTrace(trace *model.Trace, events []model.TraceEven
 	}
 
 	evs := events
+	omitted := 0
 	if len(evs) > s.cfg.MaxEventsInMail {
 		// 邮件里放不下就保留头尾，中间省略，详情仍然去网页看。
 		head := s.cfg.MaxEventsInMail / 2
@@ -119,10 +128,11 @@ func (s *alertService) AlertOnTrace(trace *model.Trace, events []model.TraceEven
 		merged := make([]model.TraceEvent, 0, s.cfg.MaxEventsInMail)
 		merged = append(merged, evs[:head]...)
 		merged = append(merged, evs[len(evs)-tail:]...)
+		omitted = len(evs) - len(merged)
 		evs = merged
 	}
 
-	s.enqueue(alertJob{kind: jobKindTrace, trace: trace, events: evs})
+	s.enqueue(alertJob{kind: jobKindTrace, trace: trace, events: evs, omitted: omitted})
 }
 
 // matchTrigger 返回命中的告警原因，未命中返回空串。
@@ -250,7 +260,8 @@ func (s *alertService) worker() {
 					select {
 					case <-time.After(wait):
 					case <-s.quit:
-						continue
+						// 关闭时不再等待限流窗口，直接把剩下的告警发出去。
+						// 否则停机瞬间的故障信号会恰好丢在等待窗口里。
 					}
 				}
 			}
@@ -265,12 +276,12 @@ func (s *alertService) handle(job alertJob) {
 
 	switch job.kind {
 	case jobKindTrace:
-		subject, htmlBody, textBody = renderTraceMail(job.trace, job.events, s.cfg)
+		subject, htmlBody, textBody = renderTraceMail(job.trace, job.events, job.omitted, s.cfg)
 	default:
 		subject, htmlBody, textBody = renderQueueDropMail(job.dropCount)
 	}
 
-	if err := s.sendMail(subject, htmlBody, textBody); err != nil {
+	if err := s.sender(s.cfg, subject, htmlBody, textBody); err != nil {
 		logger.Error("failed to send alert email",
 			zap.String("kind", job.kind),
 			zap.String("subject", subject),
@@ -331,13 +342,15 @@ type levelStat struct {
 }
 
 // renderTraceMail 生成链路告警邮件的主题、HTML 与纯文本正文。
-func renderTraceMail(trace *model.Trace, events []model.TraceEvent, cfg config.AlertConfig) (string, string, string) {
+//
+// omitted 是调用方为控制邮件体积而截掉的事件条数，必须如实展示给阅读者，
+// 否则他会误以为看到的就是完整链路，从而漏掉中间的异常步骤。
+func renderTraceMail(trace *model.Trace, events []model.TraceEvent, omitted int, cfg config.AlertConfig) (string, string, string) {
 	sort.SliceStable(events, func(i, j int) bool { return events[i].Timestamp.Before(events[j].Timestamp) })
 
-	shown := events
-	hidden := 0
-	if trace.EventCount > len(events) {
-		hidden = trace.EventCount - len(events)
+	hidden := omitted
+	if trace.EventCount > len(events)+omitted {
+		hidden += trace.EventCount - len(events) - omitted
 	}
 
 	data := mailData{
@@ -350,12 +363,12 @@ func renderTraceMail(trace *model.Trace, events []model.TraceEvent, cfg config.A
 		StartAt:    view.FormatTime(trace.StartTime),
 		EndAt:      view.FormatTime(trace.EndTime),
 		URL:        fmt.Sprintf("%s/trace/%s", strings.TrimRight(cfg.PublicURL, "/"), trace.TraceID),
-		ShownCount: len(shown),
+		ShownCount: len(events),
 		Hidden:     hidden,
 	}
 
 	counts := make(map[string]int)
-	for i, e := range shown {
+	for i, e := range events {
 		off := e.Timestamp.Sub(trace.StartTime).Milliseconds()
 		data.Events = append(data.Events, mailEvent{
 			Idx:       i + 1,
@@ -430,37 +443,37 @@ func formatParamsText(params string) string {
 
 // -------------------------------------------------------------- SMTP 发送 ----
 
-// sendMail 通过 SMTP 发送一封 multipart/alternative 邮件（纯文本 + HTML）。
+// sendMailViaSMTP 通过 SMTP 发送一封 multipart/alternative 邮件（纯文本 + HTML）。
 //
 // 同时提供 text/plain 与 text/html 两个版本，既保证手机邮件客户端能看，
 // 也显著降低被判垃圾邮件的概率。
-func (s *alertService) sendMail(subject, htmlBody, textBody string) error {
-	if len(s.cfg.Recipients) == 0 {
+func sendMailViaSMTP(cfg config.AlertConfig, subject, htmlBody, textBody string) error {
+	if len(cfg.Recipients) == 0 {
 		return fmt.Errorf("no recipients configured")
 	}
-	if s.cfg.SMTPHost == "" {
+	if cfg.SMTPHost == "" {
 		return fmt.Errorf("smtp host not configured")
 	}
 
-	msg, err := buildMessage(s.cfg.SMTPFrom, s.cfg.Recipients, subject, htmlBody, textBody)
+	msg, err := buildMessage(cfg.SMTPFrom, cfg.Recipients, subject, htmlBody, textBody)
 	if err != nil {
 		return err
 	}
 
-	addr := net.JoinHostPort(s.cfg.SMTPHost, fmt.Sprintf("%d", s.cfg.SMTPPort))
-	timeout := time.Duration(s.cfg.TimeoutSeconds) * time.Second
+	addr := net.JoinHostPort(cfg.SMTPHost, fmt.Sprintf("%d", cfg.SMTPPort))
+	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 15 * time.Second
 	}
 	deadline := time.Now().Add(timeout)
 
 	tlsCfg := &tls.Config{
-		ServerName:         s.cfg.SMTPHost,
-		InsecureSkipVerify: s.cfg.InsecureSkipVerify,
+		ServerName:         cfg.SMTPHost,
+		InsecureSkipVerify: cfg.InsecureSkipVerify,
 	}
 
 	var conn net.Conn
-	if s.cfg.UseTLS {
+	if cfg.UseTLS {
 		dialer := &net.Dialer{Timeout: timeout}
 		conn, err = tls.DialWithDialer(dialer, "tcp", addr, tlsCfg)
 	} else {
@@ -474,7 +487,7 @@ func (s *alertService) sendMail(subject, htmlBody, textBody string) error {
 		return err
 	}
 
-	client, err := smtp.NewClient(conn, s.cfg.SMTPHost)
+	client, err := smtp.NewClient(conn, cfg.SMTPHost)
 	if err != nil {
 		return fmt.Errorf("new smtp client: %w", err)
 	}
@@ -485,28 +498,28 @@ func (s *alertService) sendMail(subject, htmlBody, textBody string) error {
 	}
 
 	// 587 端口通常是明文 + STARTTLS 升级。
-	if s.cfg.StartTLS && !s.cfg.UseTLS {
+	if cfg.StartTLS && !cfg.UseTLS {
 		if err := client.StartTLS(tlsCfg); err != nil {
 			return fmt.Errorf("smtp starttls: %w", err)
 		}
 	}
 
 	// 内网中继可能不需要认证，用户名留空即跳过。
-	if s.cfg.SMTPUser != "" {
-		auth := smtp.PlainAuth("", s.cfg.SMTPUser, s.cfg.SMTPPass, s.cfg.SMTPHost)
+	if cfg.SMTPUser != "" {
+		auth := smtp.PlainAuth("", cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPHost)
 		if err := client.Auth(auth); err != nil {
 			return fmt.Errorf("smtp auth: %w", err)
 		}
 	}
 
-	from := s.cfg.SMTPFrom
+	from := cfg.SMTPFrom
 	if from == "" {
-		from = s.cfg.SMTPUser
+		from = cfg.SMTPUser
 	}
 	if err := client.Mail(from); err != nil {
 		return fmt.Errorf("smtp mail from: %w", err)
 	}
-	for _, rcpt := range s.cfg.Recipients {
+	for _, rcpt := range cfg.Recipients {
 		if rcpt == "" {
 			continue
 		}

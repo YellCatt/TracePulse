@@ -3,8 +3,8 @@ package controller
 import (
 	"html/template"
 
-	"github.com/example/gapi/model"
-	"github.com/example/gapi/view"
+	"github.com/example/tracepulse/model"
+	"github.com/example/tracepulse/view"
 )
 
 // cellVM 可折叠单元格的展示模型。

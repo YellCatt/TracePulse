@@ -1,4 +1,4 @@
-module github.com/example/gapi
+module github.com/example/tracepulse
 
 go 1.22
 

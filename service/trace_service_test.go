@@ -2,12 +2,13 @@ package service
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/example/gapi/config"
-	"github.com/example/gapi/model"
-	"github.com/example/gapi/repository"
+	"github.com/example/tracepulse/config"
+	"github.com/example/tracepulse/model"
+	"github.com/example/tracepulse/repository"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -87,6 +88,61 @@ func (f *fakeAlert) droppedCount() int {
 	return f.drops
 }
 
+// blockingRepo 包装真实仓库，让落盘卡在 gate 上。
+//
+// 用途：把"队列被打满"这件事变成确定性事件。否则消费协程可能跑得比 200 次
+// ReportEvents 还快，队列始终不满，测试就变成了时好时坏的 flaky test。
+type blockingRepo struct {
+	repository.TraceRepository
+
+	gate    chan struct{}
+	entered chan struct{} // 首次进入落盘时关闭，测试据此确认消费协程已被卡住
+
+	mu       sync.Mutex
+	blockAll bool
+	once     sync.Once
+}
+
+func (b *blockingRepo) setBlockAll(v bool) {
+	b.mu.Lock()
+	b.blockAll = v
+	b.mu.Unlock()
+}
+
+func (b *blockingRepo) isBlocked() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.blockAll
+}
+
+func (b *blockingRepo) GetTraceByID(id string) (*model.Trace, error) {
+	if b.isBlocked() {
+		b.once.Do(func() { close(b.entered) })
+		<-b.gate
+	}
+	return b.TraceRepository.GetTraceByID(id)
+}
+
+// blockingTraceService 构造一个落盘会被阻塞住的 trace service。
+func blockingTraceService(t *testing.T, cfg config.TraceConfig) (TraceService, *fakeAlert, *blockingRepo, func()) {
+	t.Helper()
+
+	db, closeDB := newTestDB(t)
+	alert := newFakeAlert()
+	cfg.NDJSONPath = filepath.Join(t.TempDir(), "fallback.ndjson")
+	cfg.NDJSONMaxMB = 1
+	if cfg.MaxEventsPerTrace <= 0 {
+		cfg.MaxEventsPerTrace = 100
+	}
+	repo := &blockingRepo{
+		TraceRepository: repository.NewTraceRepository(db),
+		gate:            make(chan struct{}),
+		entered:         make(chan struct{}),
+		blockAll:        true,
+	}
+	return NewTraceService(repo, alert, cfg), alert, repo, closeDB
+}
+
 // TestShutdownFlushesInMemoryTraces 验证优雅关闭不丢数据：
 // 上报后链路还停留在内存（未到 flush 时机），Shutdown 必须把它落库。
 func TestShutdownFlushesInMemoryTraces(t *testing.T) {
@@ -148,15 +204,34 @@ func TestShutdownIsIdempotent(t *testing.T) {
 // TestQueueFullDropsWithoutBlocking 队列满时必须直接丢弃并保持非阻塞，
 // 绝不能把采集端堵住 —— 这是"不拖垮业务"这条约束的核心。
 func TestQueueFullDropsWithoutBlocking(t *testing.T) {
-	svc, alert, closeDB := newTestService(t, config.TraceConfig{
+	// 落盘被 gate 卡住，确保队列一定会被打满，避免测试变成 flaky。
+	svc, alert, repo, closeDB := blockingTraceService(t, config.TraceConfig{
 		QueueSize:   5,
-		TTLSeconds:  3600, // TTL 很长，保证事件不会被 TTL 消费掉，从而把队列撑满
-		FlushBatch:  100000,
-		FlushMs:     100000,
+		TTLSeconds:  3600, // TTL 很长，保证事件不会被 TTL 消费掉
+		FlushBatch:  1,    // 每来一条就落盘，确保很快触发一次 flush
+		FlushMs:     5,    // flush 定时器要够快，测试不能干等
 		CleanupDays: 7,
 	})
 	defer closeDB()
-	defer svc.Shutdown()
+	// 先放行再关闭，否则 Shutdown 会一直等在这个 gate 上。
+	defer func() {
+		repo.setBlockAll(false)
+		close(repo.gate)
+		svc.Shutdown()
+	}()
+
+	// 先投一条把消费协程引入落盘流程，等它卡在 gate 上再灌量。
+	// 这样"队列被打满"是确定性的，而不是赌消费者够不够慢。
+	if err := svc.ReportEvents([]model.TraceEvent{
+		{TraceID: "t-trigger", Timestamp: time.Now(), Level: model.LevelInfo, Module: "m", Event: "tick"},
+	}); err != nil {
+		t.Fatalf("report trigger: %v", err)
+	}
+	select {
+	case <-repo.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("consumer never reached the flush path, cannot construct a full queue")
+	}
 
 	batch := make([]model.TraceEvent, 0, 200)
 	for i := 0; i < 200; i++ {
@@ -191,6 +266,10 @@ func TestQueueFullDropsWithoutBlocking(t *testing.T) {
 	}
 	if alert.droppedCount() == 0 {
 		t.Fatal("expected queue drop alert to be triggered")
+	}
+	// 队列容量之外的事件必须全部被丢弃，不能凭空多出容量。
+	if got := svc.Stats().DroppedTotal; got < 195 {
+		t.Fatalf("dropped %d events, want at least 195 (queue cap 5 of 200)", got)
 	}
 }
 

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"bytes"
 	"encoding/json"
 	"sort"
 	"strconv"
@@ -89,6 +90,57 @@ type TraceEvent struct {
 }
 
 func (TraceEvent) TableName() string { return "trace_events" }
+
+// UnmarshalJSON 兼容 params 的多种上报写法。
+//
+// 采集端最自然的写法是把 params 当对象传（"params":{"k":1}），而库里存的是字符串。
+// 如果严格按 string 解析，一个字段写法不对就会让整批事件被 400 拒掉 ——
+// 为了上报成功率的健壮性，这里容忍对象 / 数字 / 布尔 / 数组，统一序列化成紧凑
+// JSON 字符串存库，前端照样能按 KV 展开。
+func (e *TraceEvent) UnmarshalJSON(data []byte) error {
+	// 用别名避免递归调用本方法。
+	type alias TraceEvent
+
+	aux := struct {
+		*alias
+		Params json.RawMessage `json:"params"`
+	}{alias: (*alias)(e)}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	e.Params = normalizeParams(aux.Params)
+	return nil
+}
+
+// normalizeParams 把任意 JSON 值规范化成字符串：
+//   - 字符串原样保留（可能本身就是 JSON 文本）
+//   - 其他类型重新序列化成紧凑 JSON
+//   - 缺失则返回空串
+func normalizeParams(raw json.RawMessage) string {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return ""
+	}
+	// 已经是 JSON 字符串字面量，去掉外层引号。
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err == nil {
+			return s
+		}
+	}
+	// null 视为空。
+	if string(trimmed) == "null" {
+		return ""
+	}
+	// 其他类型（对象 / 数组 / 数字 / 布尔）压缩成紧凑 JSON。
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, trimmed); err != nil {
+		return string(trimmed)
+	}
+	return compact.String()
+}
 
 // ParamsList 把 params（JSON 对象字符串）解析为有序 KV 列表，供页面与邮件渲染。
 // 解析失败时退化为整串展示，保证异常数据也能看见。
