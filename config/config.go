@@ -21,6 +21,7 @@ type Config struct {
 	Log      LogConfig      `yaml:"log"`
 	Trace    TraceConfig    `yaml:"trace"`
 	Alert    AlertConfig    `yaml:"alert"`
+	Demo     DemoConfig     `yaml:"demo"`
 }
 
 // ServerConfig HTTP 服务配置。
@@ -122,6 +123,16 @@ type AlertConfig struct {
 	QueueSize int `yaml:"queue_size"`
 }
 
+// DemoConfig 内置演示数据配置。
+type DemoConfig struct {
+	// Disable 关闭启动时的演示数据写入。正式部署建议设为 true。
+	// 用反向语义，保证老配置文件缺少该段时仍走"首次启动灌入演示数据"这个默认行为。
+	Disable bool `yaml:"disable"`
+	// Force 即使库里已有链路也再灌一批，用于反复演示。
+	// 演示数据的 trace_id 带启动时间戳，不会撞上 traces.trace_id 的唯一索引。
+	Force bool `yaml:"force"`
+}
+
 var cfg Config
 
 // LoadConfig 读取配置；文件不存在则生成默认配置。
@@ -182,6 +193,10 @@ func defaultConfig() Config {
 			NDJSONMaxMB:            64,
 			MaxEventsPerTrace:      5000,
 			ReportMaxBodyBytes:     8 << 20, // 8MB
+		},
+		Demo: DemoConfig{
+			Disable: false,
+			Force:   false,
 		},
 		Alert: AlertConfig{
 			Enabled:            false,
@@ -321,6 +336,7 @@ func GetDatabaseConfig() DatabaseConfig { return cfg.Database }
 func GetLogConfig() LogConfig           { return cfg.Log }
 func GetTraceConfig() TraceConfig       { return cfg.Trace }
 func GetAlertConfig() AlertConfig       { return cfg.Alert }
+func GetDemoConfig() DemoConfig         { return cfg.Demo }
 
 // 兼容旧调用方：保留细粒度 getter。
 func GetServerPort() int      { return cfg.Server.Port }

@@ -1,0 +1,7 @@
+2026-08-30 07:04:18	info	logger/logger.go:103	demo traces seeded	{"count": 5}
+2026-08-30 07:04:18	info	logger/logger.go:103	server starting	{"port": 8086}
+2026-08-30 07:04:54	info	logger/logger.go:103	server starting	{"port": 8086}
+2026-08-30 07:05:02	info	logger/logger.go:103	server starting	{"port": 8086}
+2026-08-30 07:05:02	info	logger/logger.go:103	trace service shutting down, flushing remaining events...
+2026-08-30 07:05:02	info	logger/logger.go:103	trace service shutdown complete
+2026-08-30 07:05:43	info	logger/logger.go:103	server starting	{"port": 8086}

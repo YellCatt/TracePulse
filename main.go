@@ -49,6 +49,19 @@ func main() {
 	traceSvc := service.NewTraceService(traceRepo, alertSvc, traceCfg)
 	traceController := controller.NewTraceController(traceSvc, int64(traceCfg.ReportMaxBodyBytes))
 
+	// 首次启动（库里还没有任何链路）时灌入演示数据，打开页面就能看到效果。
+	// 正式部署在 config/config.yaml 里把 demo.disable 设为 true 即可关闭。
+	demoCfg := config.GetDemoConfig()
+	if !demoCfg.Disable {
+		seeded, err := service.SeedDemoData(traceRepo, demoCfg.Force)
+		if err != nil {
+			logger.Error("failed to seed demo traces", zap.Error(err))
+		}
+		if seeded > 0 {
+			logger.Info("demo traces seeded", zap.Int("count", seeded))
+		}
+	}
+
 	r := router.NewRouter(userController, statusController, traceController)
 
 	serverCfg := config.GetServerConfig()

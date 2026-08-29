@@ -1,9 +1,52 @@
 server:
-  port: 8086
-
+    port: 8086
+    read_timeout_seconds: 30
+    write_timeout_seconds: 60
+    shutdown_timeout_seconds: 20
 database:
-  path: ./data.db
-
+    path: ./data.db
+    busy_timeout_ms: 5000
+    journal_mode: WAL
+    sync_mode: NORMAL
 log:
-  path: ./logs
-  level: info
+    path: ./logs
+    level: info
+trace:
+    queue_size: 1000
+    ttl_seconds: 300
+    flush_batch: 200
+    flush_ms: 200
+    cleanup_days: 7
+    cleanup_interval_minutes: 60
+    disable_vacuum: false
+    ndjson_path: ""
+    ndjson_max_mb: 64
+    max_events_per_trace: 5000
+    report_max_body_bytes: 8388608
+alert:
+    enabled: false
+    smtp_host: ""
+    smtp_port: 587
+    smtp_user: ""
+    smtp_password: ""
+    smtp_from: ""
+    use_tls: false
+    starttls: false
+    insecure_skip_verify: false
+    recipients:
+        - admin@example.com
+    triggers:
+        - error
+        - warn
+        - timeout
+        - queue_drop
+    public_url: http://localhost:8086
+    slow_threshold_ms: 0
+    timeout_seconds: 15
+    dedup_seconds: 300
+    min_interval_seconds: 60
+    max_events_in_mail: 500
+    queue_size: 256
+demo:
+    disable: false
+    force: false
