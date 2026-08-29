@@ -1,0 +1,119 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - os: linux
+            arch: mipsle
+            suffix: linux_mipsle
+            goflags: GOOS=linux GOARCH=mipsle GOMIPS=softfloat CGO_ENABLED=1
+            ldflags: "-s -w -linkmode=external -extldflags '-static'"
+            # OpenWrt SDK for ramips/mt7620 (MT7620A, mipsel_24kc / little-endian)
+            toolchain_url: https://downloads.openwrt.org/releases/23.05.0/targets/ramips/mt7620/openwrt-sdk-23.05.0-ramips-mt7620_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+          - os: windows
+            arch: amd64
+            suffix: windows_amd64
+            goflags: GOOS=windows GOARCH=amd64 CGO_ENABLED=1
+            ldflags: "-s -w"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+
+    - name: Install OpenWrt musl toolchain for MIPSle
+      if: matrix.target.arch == 'mipsle'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y xz-utils
+        wget -q "${{ matrix.target.toolchain_url }}"
+        tar -xJf openwrt-sdk-*.tar.xz
+        SDK_DIR=$(realpath $(ls -d openwrt-sdk-* | head -1))
+        TOOLCHAIN_BIN=$(find "$SDK_DIR/staging_dir" -name 'mipsel-openwrt-linux-musl-gcc' -printf '%h\n' | head -1)
+        TOOLCHAIN_BIN=$(realpath "$TOOLCHAIN_BIN")
+        echo "TOOLCHAIN_BIN=$TOOLCHAIN_BIN" >> $GITHUB_ENV
+        echo "$TOOLCHAIN_BIN" >> $GITHUB_PATH
+        echo "CC=$TOOLCHAIN_BIN/mipsel-openwrt-linux-musl-gcc" >> $GITHUB_ENV
+        echo "CXX=$TOOLCHAIN_BIN/mipsel-openwrt-linux-musl-g++" >> $GITHUB_ENV
+        "$TOOLCHAIN_BIN/mipsel-openwrt-linux-musl-gcc" --version
+
+    - name: Install MinGW-w64 for Windows
+      if: matrix.target.os == 'windows'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y mingw-w64
+        echo "CC=x86_64-w64-mingw32-gcc" >> $GITHUB_ENV
+        echo "CXX=x86_64-w64-mingw32-g++" >> $GITHUB_ENV
+
+    - name: Download dependencies
+      run: |
+        go clean -modcache
+        go mod tidy
+
+    - name: Build for ${{ matrix.target.os }}/${{ matrix.target.arch }}
+      run: |
+        OUTPUT_FILE="gapi_${{ matrix.target.suffix }}${{ matrix.target.os == 'windows' && '.exe' || '' }}"
+        ${{ matrix.target.goflags }} go build -tags netgo -ldflags="${{ matrix.target.ldflags }}" -o "$OUTPUT_FILE"
+        ls -la gapi_*
+        file "$OUTPUT_FILE" || true
+
+    - name: Package release
+      run: |
+        mkdir -p release
+        if [ "${{ matrix.target.os }}" = "windows" ]; then
+          mv gapi_${{ matrix.target.suffix }}.exe release/
+        else
+          mv gapi_${{ matrix.target.suffix }} release/
+        fi
+        ls -la release/
+        tar -czf gapi_${{ matrix.target.suffix }}.tar.gz release/
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: gapi_${{ matrix.target.suffix }}
+        path: gapi_${{ matrix.target.suffix }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: ls -la artifacts/
+
+      - name: Create or Update Dev Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="dev-latest"
+          echo "使用固定版本tag: $VERSION"
+
+          gh release delete "$VERSION" --yes 2>/dev/null || true
+
+          gh release create "$VERSION" \
+            --title "Development Build (Latest)" \
+            --notes "Automatic build from commit ${{ github.sha }}%0A%0A**Platforms:**%0A- Linux mipsle (OpenWrt/musl, statically linked)%0A- Windows amd64%0A%0A**使用说明:**%0A解压后运行对应平台的可执行文件" \
+            --prerelease \
+            artifacts/*

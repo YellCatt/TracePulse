@@ -1,0 +1,9 @@
+server:
+  port: 8084
+
+database:
+  path: ./data.db
+
+log:
+  path: ./logs
+  level: info
