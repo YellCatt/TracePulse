@@ -249,9 +249,9 @@ type eventRow struct {
 	Seq          int
 	Clock        string
 	FullTime     string
-	Offset       string
-	Gap          string
-	GapSlow      bool
+	// Gap 与上一事件的间隔，即「这一步花了多久」，是排查时最常看的指标。
+	Gap     string
+	GapSlow bool
 	Level        string
 	Module       string
 	Event        string
@@ -283,21 +283,15 @@ func (d *detailPageData) build(trace *model.Trace, events []model.TraceEvent) {
 	}
 
 	counts := make(map[string]int)
-	base := trace.StartTime
 	var prev time.Time
 	prevSet := false
 
 	d.Events = make([]eventRow, 0, len(events))
 	for i, e := range events {
-		if i == 0 {
-			base = e.Timestamp
-		}
-
 		row := eventRow{
 			Seq:          i + 1,
 			Clock:        view.FormatClock(e.Timestamp),
 			FullTime:     view.FormatTime(e.Timestamp),
-			Offset:       view.FormatOffset(e.Timestamp.Sub(base).Milliseconds()),
 			Level:        e.Level,
 			Module:       e.Module,
 			Event:        e.Event,

@@ -259,7 +259,7 @@ table.kv td{border:none;padding:2px 0;word-break:break-all}
   <table class="timeline">
     <thead>
       <tr>
-        <th>#</th><th>时间</th><th>偏移</th><th>间隔</th><th>级别</th>
+        <th>#</th><th>时间</th><th>步骤耗时</th><th>级别</th>
         <th>模块</th><th>事件</th><th>消息</th><th>KV 参数</th><th>错误消息</th>
       </tr>
     </thead>
@@ -268,8 +268,7 @@ table.kv td{border:none;padding:2px 0;word-break:break-all}
       <tr class="{{if .IsError}}row-err{{end}}">
         <td class="seq-cell" data-label="#">{{.Seq}}</td>
         <td data-label="时间"><span title="{{.FullTime}}">{{.Clock}}</span></td>
-        <td data-label="偏移">{{.Offset}}</td>
-        <td data-label="间隔">{{if .Gap}}<span class="{{if .GapSlow}}gap-slow{{end}}">{{.Gap}}</span>{{else}}-{{end}}</td>
+        <td data-label="步骤耗时">{{if .Gap}}<span class="{{if .GapSlow}}gap-slow{{end}}" title="与上一事件的时间间隔">{{.Gap}}</span>{{else}}<span class="muted">-</span>{{end}}</td>
         <td data-label="级别"><span class="lvl lvl-{{.Level}}">{{.Level}}</span></td>
         <td data-label="模块">{{.Module}}</td>
         <td data-label="事件">{{.Event}}</td>
