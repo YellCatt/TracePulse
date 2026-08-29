@@ -11,7 +11,7 @@
 - **内存不泄漏**：活跃链路有 TTL 兜底，客户端漏发 `end` 事件也会强制落盘
 - **零依赖前端**：检索页与详情页服务端渲染，手机浏览器无需 JS 也能排查
 - **告警不炸群**：同链路同原因去重 + 全局最小间隔限流 + 队列丢弃聚合汇总
-- **纯 Go 实现**：`modernc.org/sqlite` 无 CGO，可交叉编译成静态单文件
+- **跨平台**：默认 `modernc.org/sqlite`（纯 Go 无 CGO）出静态单文件；MIPS 路由器自动切到 CGO 版 `mattn/go-sqlite3`，极路由可直接跑
 - **开箱即用**：配置文件缺失自动生成，字段缺失自动补全并回写
 
 ## 快速开始
@@ -464,7 +464,9 @@ TracePulse/
 
 - **语言**: Go 1.22（标准库 `net/http` + `http.ServeMux`）
 - **ORM**: GORM
-- **数据库**: SQLite（glebarez/sqlite，底层 modernc.org/sqlite，纯 Go 无 CGO）
+- **数据库**: SQLite
+  - 默认：`glebarez/sqlite`（底层 `modernc.org/sqlite`，纯 Go 无 CGO）
+  - MIPS：`gorm.io/driver/sqlite` + `mattn/go-sqlite3`（CGO 版，供极路由等 MIPS 设备使用）
 - **日志**: Zap
 - **系统监控**: gopsutil
 - **API 文档**: Swagger（http-swagger）
@@ -507,7 +509,31 @@ CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o tracepulse-macos
 
 仓库自带 GitHub Actions，推送到 `main` 会自动构建 6 个平台的产物（Linux amd64 / arm64 / armv7、Windows amd64、macOS amd64 / arm64），打包后发布到 `dev-latest` 预发布版本。
 
-> **注意**：`modernc.org/libc` 未提供 MIPS 实现，因此**无法**构建 `linux/mipsle`。若需要在 MIPS 架构的 OpenWrt 路由器上运行，必须改用 CGO 版驱动（`mattn/go-sqlite3` + `gorm.io/driver/sqlite`）并配合 OpenWrt SDK 工具链编译。
+### MIPS 路由器（极路由等）
+
+`modernc.org/libc` 没有 MIPS 实现，因此 MIPS 架构**不能**用 `CGO_ENABLED=0` 的默认驱动。项目已内置好切换：`config/database_cgo.go` 带 `//go:build mips || mipsle || mips64 || mips64le` 标签，构建 MIPS 时会自动改用 CGO 版驱动（`gorm.io/driver/sqlite` + `mattn/go-sqlite3`），初始化逻辑与默认实现共用 `config/database_common.go`，无需改动任何业务代码。
+
+编译需要 OpenWrt SDK 提供的交叉工具链，并把 `CC` 指向它，例如极路由（MT7620/MT7621，mipsel 小端）：
+
+```bash
+export STAGING_DIR=/path/to/openwrt-sdk/staging_dir
+export PATH=$STAGING_DIR/toolchain-mipsel_24kc_gcc-*/bin:$PATH
+
+CGO_ENABLED=1 GOOS=linux GOARCH=mipsle GOMIPS=softfloat \
+  CC=mipsel-openwrt-linux-gcc \
+  go build -ldflags="-s -w" -o tracepulse-mipsle .
+
+# 静态链接（路由器上通常缺 libc 之外的依赖，推荐）
+CGO_ENABLED=1 GOOS=linux GOARCH=mipsle GOMIPS=softfloat \
+  CC=mipsel-openwrt-linux-musl-gcc \
+  go build -ldflags="-s -w -linkmode external -extldflags '-static'" \
+  -o tracepulse-mipsle .
+```
+
+- `GOARCH` 取值：32 位用 `mipsle`（小端，绝大多数路由器），大端用 `mips`；64 位用 `mips64le` / `mips64`。
+- `GOMIPS`：无 FPU 或内核未开启 FP 模拟时设 `softfloat`（默认），有硬浮点可设 `hardfloat`。
+- 想在 Windows 上交叉编译，可用 WSL / Docker 跑上述命令，宿主 gcc 编不了 MIPS 目标。
+- 体积可再压缩：加 `-tags sqlite_omit_load_extension` 关掉 SQLite 扩展加载，或用 `upx --best`（MIPS 需 upx 支持该架构）。
 
 ## 优雅关闭
 
