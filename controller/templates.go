@@ -95,7 +95,7 @@ button,.btn{display:inline-block;padding:7px 14px;font-size:13px;font-family:inh
   color:var(--fg);background:var(--bg);border:1px solid var(--border);border-radius:6px;cursor:pointer}
 button:hover,.btn:hover{text-decoration:none;border-color:var(--muted)}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-.quick{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:center}
+.quick{display:flex;flex-wrap:nowrap;gap:6px;margin-top:10px;align-items:center;overflow-x:auto;padding-bottom:4px}
 .quick a{padding:2px 10px;border:1px solid var(--border);border-radius:20px;
   background:var(--bg);color:var(--muted);font-size:12px}
 .quick a:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
@@ -312,6 +312,10 @@ table.kv td{border:none;padding:2px 0;word-break:break-all}
   <h2>条件检索</h2>
   <form class="filters" method="get" action="/traces">
     <div class="field">
+      <label for="f-service">服务</label>
+      <input id="f-service" name="service" value="{{.Form.Service}}" placeholder="例如 api-gateway">
+    </div>
+    <div class="field">
       <label for="f-trace">trace_id（支持作为过滤条件）</label>
       <input id="f-trace" name="trace_id" value="{{.Form.TraceID}}" placeholder="精确匹配" spellcheck="false">
     </div>
@@ -343,10 +347,6 @@ table.kv td{border:none;padding:2px 0;word-break:break-all}
     <div class="field">
       <label for="f-module">模块</label>
       <input id="f-module" name="module" value="{{.Form.Module}}" placeholder="例如 order">
-    </div>
-    <div class="field">
-      <label for="f-service">服务</label>
-      <input id="f-service" name="service" value="{{.Form.Service}}" placeholder="例如 api-gateway">
     </div>
     <div class="field">
       <label for="f-haserr">是否含错误</label>
