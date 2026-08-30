@@ -32,7 +32,9 @@ import (
 
 // TraceService 链路服务接口。
 type TraceService interface {
-	ReportEvents(events []model.TraceEvent) error
+	// ReportEvents 上报一批事件。url 是这次上报的业务入口地址，会记到事件所属
+	// 的链路上；事件自带 url 时以事件为准，url 为空则不改动已有值。
+	ReportEvents(events []model.TraceEvent, url string) error
 	GetTrace(traceID string) (*model.Trace, []model.TraceEvent, error)
 	ListTraces(filter model.TraceFilter) (*model.TraceListResult, error)
 	Stats() TraceStats
@@ -139,8 +141,12 @@ func NewTraceService(repo repository.TraceRepository, alertSvc AlertService, cfg
 
 // ------------------------------------------------------------------ 上报 ----
 
-// ReportEvents 接收一批事件。全程非阻塞，队列满则丢弃。
-func (s *traceService) ReportEvents(events []model.TraceEvent) error {
+// ReportEvents 接收一批事件，url 作为业务入口地址记到链路上。全程非阻塞，队列满则丢弃。
+//
+// url 的传递路径：HTTP 层 → 事件携带字段 → 队列 → 内存聚合 → traces.url。
+// 事件自己带了 url 时不覆盖，这样同一条链路分批上报、或一条链路跨多个入口时，
+// 都能各自留下线索（先到的生效，通常是 start 事件）。
+func (s *traceService) ReportEvents(events []model.TraceEvent, url string) error {
 	if s.closed.Load() {
 		return errors.New("trace service is shutting down")
 	}
@@ -152,6 +158,10 @@ func (s *traceService) ReportEvents(events []model.TraceEvent) error {
 		if e.TraceID == "" {
 			// 没有 trace_id 的事件无法聚合，直接落兜底日志后跳过。
 			e.TraceID = "unknown"
+		}
+		// 事件没自带 url 时，用本次请求级的 url 兜底。
+		if e.URL == "" {
+			e.URL = url
 		}
 		now := time.Now()
 		if e.Timestamp.IsZero() {
@@ -331,6 +341,11 @@ func (s *traceService) addToActive(e model.TraceEvent) {
 		)
 	}
 
+	// 先到先得：链路的入口地址以首批事件为准，后续批次不覆盖已记录的值。
+	if at.trace.URL == "" && e.URL != "" {
+		at.trace.URL = e.URL
+	}
+
 	// 单条链路的事件数封顶，防止异常链路无限写撑爆内存和磁盘。
 	if len(at.events) >= s.cfg.MaxEventsPerTrace {
 		logger.Warn("trace event cap reached, ignoring event",
@@ -454,6 +469,10 @@ func (s *traceService) flushTrace(at *activeTrace) {
 		}
 		if existing.ServiceName == "" {
 			existing.ServiceName = trace.ServiceName
+		}
+		// 分批落盘时只有其中一批带 url，已有值就不动，没有则补齐。
+		if existing.URL == "" {
+			existing.URL = trace.URL
 		}
 
 		if err := s.repo.UpdateTrace(existing); err != nil {

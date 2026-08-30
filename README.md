@@ -51,6 +51,15 @@ go build -o tracepulse
 
 ### POST /api/traces/report
 
+`url` 可选，表示这条链路对应的业务入口（页面 URL 或接口地址），会记到链路的 `url` 字段并在列表页 / 详情页展示。两种传法：
+
+| 传法 | 适用 |
+|------|------|
+| 请求体字段 `"url"` | 批量写法。与 `events` 同级 |
+| 查询参数 `?url=` | 任意写法。**裸数组没有包裹层，只能用它传** |
+
+请求体优先于查询参数；都没传就留空，不影响事件入库。超过 2048 个字符会截断（不会因为一个过长的 url 拒掉整批事件）。
+
 请求体支持两种写法，任选其一：
 
 ```bash
@@ -58,6 +67,7 @@ go build -o tracepulse
 curl -X POST http://localhost:8086/api/traces/report \
   -H "Content-Type: application/json" \
   -d '{
+    "url": "https://shop.example.com/order/confirm?sku=A-01",
     "events": [
       {
         "trace_id": "req-7f3a91",
@@ -95,10 +105,18 @@ curl -X POST http://localhost:8086/api/traces/report \
 ```
 
 ```bash
-# 写法二：裸数组（单条上报更省事）
-curl -X POST http://localhost:8086/api/traces/report \
+# 写法二：裸数组（单条上报更省事，url 走查询参数）
+curl -X POST 'http://localhost:8086/api/traces/report?url=https://shop.example.com/pay' \
   -H "Content-Type: application/json" \
   -d '[{"trace_id":"req-7f3a91","level":"info","module":"pay","event":"start","message":"开始支付"}]'
+```
+
+单条上报也可以继续用批量写法，把 `url` 放进请求体：
+
+```bash
+curl -X POST http://localhost:8086/api/traces/report \
+  -H "Content-Type: application/json" \
+  -d '{"url":"/api/v1/pay/create","events":[{"trace_id":"req-7f3a91","level":"info","module":"pay","event":"start"}]}'
 ```
 
 成功响应：
@@ -120,6 +138,7 @@ curl -X POST http://localhost:8086/api/traces/report \
 | `message` | 否 | 事件描述 |
 | `params` | 否 | 附加参数，详见下方容错说明 |
 | `error_message` | 否 | 错误信息 |
+| `url` | 否 | 业务入口地址。**事件级字段，仅用于把值带进链路**，事件表不落这一列；同一条链路以首批上报的值为准 |
 
 `params` 容错：库里存的是字符串，但上报时写对象 / 数组 / 数字 / 布尔都能正常接收，会自动序列化成紧凑 JSON 并在页面与邮件里按 KV 展开——不会因为一个字段写法不对就让整批事件被拒。
 
@@ -137,6 +156,7 @@ curl -X POST http://localhost:8086/api/traces/report \
 | 限制 | 默认值 | 配置项 |
 |------|--------|--------|
 | 单次请求事件数 | 5000 | 硬编码上限 |
+| url 长度 | 2048 字符，超出截断 | 硬编码上限 |
 | 请求体大小 | 8 MB | `trace.report_max_body_bytes` |
 | 单条链路事件数 | 5000 | `trace.max_events_per_trace` |
 | 队列容量 | 1000 | `trace.queue_size` |

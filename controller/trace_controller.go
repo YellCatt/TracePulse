@@ -40,12 +40,36 @@ func NewTraceController(traceService service.TraceService, maxBodyBytes int64) *
 
 // ---------------------------------------------------------------- JSON API ----
 
+// maxReportURLRunes url 的最大长度，与 model.Trace.URL 的 size 对齐。
+// 再长对排查没有额外价值，只会把每一行数据都撑大。
+const maxReportURLRunes = 2048
+
+// clampURL 去掉首尾空白并截断超长 url。
+//
+// 为什么截断而不是返回 400：上报接口的核心承诺是不轻易失败 —— url 过长属于数据瑕疵，
+// 不该连带把整批有价值的事件一起拒掉。保留前 2048 个字符足以定位接口与关键参数。
+func clampURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if len(raw) <= maxReportURLRunes {
+		return raw
+	}
+	// 按 rune 截断，避免把多字节字符切成半截乱码。
+	logger.Warn("report url truncated",
+		zap.Int("raw_bytes", len(raw)),
+		zap.Int("max_runes", maxReportURLRunes))
+	return string([]rune(raw)[:maxReportURLRunes])
+}
+
 // ReportEvents 上报一批链路事件。
 //
 // 请求体支持两种写法：
 //
-//	{"events":[{...},{...}]}   批量（推荐）
-//	[{...},{...}]              裸数组（单行上报时更省事）
+//	{"url":"...","events":[{...},{...}]}   批量（推荐）
+//	[{...},{...}]                          裸数组（单行上报时更省事）
+//
+// url 记录到链路上，表示这次链路对应的业务入口（页面 URL 或接口地址）。它有两种传法：
+// 请求体字段（批量写法）与查询参数 ?url=（裸数组没有包裹层，只能走查询参数）。
+// 请求体优先，查询参数兜底；都没传就留空，不影响事件入库。
 //
 // 队列满时事件会被丢弃，但接口仍然返回 200 —— 采集端不应该因为服务端压力大而失败重试，
 // 否则容易把雪崩放大。
@@ -63,15 +87,15 @@ func (c *TraceController) ReportEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logger.Debug("trace report received",
-		zap.Int("body_bytes", len(body)),
-		zap.String("remote_addr", r.RemoteAddr),
-	)
+	reportURL := clampURL(r.URL.Query().Get("url"))
 
 	var events []model.TraceEvent
 	var req model.ReportRequest
 	if err := json.Unmarshal(body, &req); err == nil && len(req.Events) > 0 {
 		events = req.Events
+		if u := clampURL(req.URL); u != "" {
+			reportURL = u
+		}
 	} else if err := json.Unmarshal(body, &events); err != nil {
 		logger.Warn("report request rejected: invalid json", zap.Error(err))
 		writeJSON(w, http.StatusBadRequest, errorResp("invalid json body, expect {\"events\":[...]} or [...]"))
@@ -90,7 +114,13 @@ func (c *TraceController) ReportEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := c.traceService.ReportEvents(events); err != nil {
+	logger.Debug("trace report received",
+		zap.Int("body_bytes", len(body)),
+		zap.String("url", reportURL),
+		zap.String("remote_addr", r.RemoteAddr),
+	)
+
+	if err := c.traceService.ReportEvents(events, reportURL); err != nil {
 		logger.Error("report events to service failed",
 			zap.Int("count", len(events)), zap.Error(err))
 		writeJSON(w, http.StatusServiceUnavailable, errorResp(err.Error()))
@@ -283,6 +313,7 @@ type detailPageData struct {
 type traceSummary struct {
 	Status       string
 	Service      string
+	URL          string
 	Duration     string
 	Start        string
 	End          string
@@ -326,6 +357,7 @@ func (d *detailPageData) build(trace *model.Trace, events []model.TraceEvent) {
 	d.Summary = traceSummary{
 		Status:       trace.Status,
 		Service:      trace.ServiceName,
+		URL:          trace.URL,
 		Duration:     view.FormatDuration(trace.DurationMs),
 		Start:        view.FormatTime(trace.StartTime),
 		End:          view.FormatTime(trace.EndTime),
@@ -508,7 +540,10 @@ type filterForm struct {
 }
 
 type traceRow struct {
-	Trace    *model.Trace
+	Trace *model.Trace
+	// URLShort 截断后的链路入口地址。列表里完整 URL 太长会把表格撑垮，
+	// 截断展示 + title 悬停看全文。
+	URLShort string
 	Start    string
 	End      string
 	Duration string
@@ -526,6 +561,7 @@ func (d *listPageData) build(result *model.TraceListResult) {
 		t := result.Traces[i]
 		d.Rows = append(d.Rows, traceRow{
 			Trace:    &t,
+			URLShort: view.Truncate(t.URL, 60),
 			Start:    view.FormatTime(t.StartTime),
 			End:      view.FormatTime(t.EndTime),
 			Duration: view.FormatDuration(t.DurationMs),

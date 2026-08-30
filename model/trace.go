@@ -67,8 +67,11 @@ type Trace struct {
 	HasError     bool      `json:"has_error"`
 	ErrorMessage string    `gorm:"type:text" json:"error_message"`
 	EventCount   int       `json:"event_count"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	// URL 这条链路对应的业务入口地址（页面 URL 或接口地址），由上报方传入。
+	// size 给到 2048：真实业务的 URL 常带一串 query 参数，给小了会被截断到认不出接口。
+	URL       string    `gorm:"size:2048" json:"url"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (Trace) TableName() string { return "traces" }
@@ -86,7 +89,13 @@ type TraceEvent struct {
 	Message      string    `gorm:"type:text" json:"message"`
 	Params       string    `gorm:"type:text" json:"params"`
 	ErrorMessage string    `gorm:"type:text" json:"error_message"`
-	CreatedAt    time.Time `json:"created_at"`
+	// URL 上报时携带的业务入口地址。
+	//
+	// 刻意标成 gorm:"-"：url 是链路级属性，聚合时会写到 traces.url，没必要在
+	// 事件表里每行重复存一份。这里只是借事件把值从 HTTP 层穿过异步队列带进聚合逻辑 ——
+	// 事件进队列后顺序会被打散，只有跟着事件走才能对上号。
+	URL       string    `gorm:"-" json:"url,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func (TraceEvent) TableName() string { return "trace_events" }
@@ -189,8 +198,10 @@ func stringify(v interface{}) string {
 	}
 }
 
-// ReportRequest 上报请求体。支持 {"events":[...]} 与裸数组 [...] 两种写法。
+// ReportRequest 上报请求体。支持 {"url":"...","events":[...]} 与裸数组 [...] 两种写法。
 type ReportRequest struct {
+	// URL 链路的业务入口地址。裸数组写法没有包裹层，改用查询参数 ?url= 传递。
+	URL    string       `json:"url"`
 	Events []TraceEvent `json:"events"`
 }
 

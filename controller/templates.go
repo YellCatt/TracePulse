@@ -2,6 +2,7 @@ package controller
 
 import (
 	"html/template"
+	"strings"
 
 	"github.com/example/tracepulse/model"
 	"github.com/example/tracepulse/view"
@@ -34,6 +35,11 @@ var pageTemplates = template.Must(template.New("pages").Funcs(template.FuncMap{
 	"inc": func(i int) int { return i + 1 },
 	"isErrStatus": func(s string) bool {
 		return s == model.TraceStatusError || s == model.TraceStatusTimeout
+	},
+	// isAbsURL 只有 http(s) 开头的 url 才渲染成可点链接。
+	// 相对路径（如 "/api/order"）点了会打到 tracepulse 自己的路由上，纯属误导。
+	"isAbsURL": func(s string) bool {
+		return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
 	},
 }).Parse(pageTemplatesSrc))
 
@@ -152,6 +158,12 @@ table.kv td{border:none;padding:2px 0;word-break:break-all}
 .meta{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px 16px;margin-top:10px}
 .meta div{font-size:13px}
 .meta span{display:block;font-size:11px;color:var(--muted)}
+/* URL 通常很长，独占一行才不会被挤成竖排 */
+.meta .meta-url{grid-column:1/-1}
+.urlbox{display:inline-block;word-break:break-all;font-size:12px;
+  font-family:ui-monospace,Menlo,Consolas,monospace}
+/* 列表里跟在 trace_id 下方的入口地址，作为次要信息弱化显示 */
+.row-url{margin-top:3px;font-size:11px;color:var(--muted);word-break:break-all}
 .errbox{margin-top:12px;padding:10px 12px;border-radius:8px;background:var(--errbg);
   border:1px solid var(--err);color:var(--err);white-space:pre-wrap;word-break:break-all;font-size:13px}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
@@ -244,6 +256,7 @@ table.kv td{border:none;padding:2px 0;word-break:break-all}
 
   <div class="meta">
     <div><span>Service</span>{{if .Summary.Service}}{{.Summary.Service}}{{else}}<em class="muted">-</em>{{end}}</div>
+    <div class="meta-url"><span>URL</span>{{if .Summary.URL}}{{if isAbsURL .Summary.URL}}<a class="urlbox" href="{{.Summary.URL}}" target="_blank" rel="noopener noreferrer">{{.Summary.URL}}</a>{{else}}<code class="urlbox">{{.Summary.URL}}</code>{{end}}{{else}}<em class="muted">-</em>{{end}}</div>
     <div><span>Duration</span>{{.Summary.Duration}}</div>
     <div><span>Start</span>{{.Summary.Start}}</div>
     <div><span>End</span>{{.Summary.End}}</div>
@@ -416,7 +429,7 @@ table.kv td{border:none;padding:2px 0;word-break:break-all}
     <tbody>
     {{range .Rows}}
       <tr class="{{if .IsError}}row-err{{end}}">
-        <td data-label="Trace ID"><code>{{.Trace.TraceID}}</code></td>
+        <td data-label="Trace ID"><code>{{.Trace.TraceID}}</code>{{if .URLShort}}<div class="row-url" title="{{.Trace.URL}}">{{.URLShort}}</div>{{end}}</td>
         <td data-label="状态"><span class="status status-{{.Trace.Status}}">{{.Trace.Status}}</span></td>
         <td data-label="服务">{{if .Trace.ServiceName}}{{.Trace.ServiceName}}{{else}}<span class="muted">-</span>{{end}}</td>
         <td data-label="开始时间">{{.Start}}</td>

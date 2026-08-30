@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -93,6 +94,95 @@ func TestReportAcceptsBothPayloadShapes(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("body %s: status = %d, want 200 (resp: %s)", body, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+// TestReportURLFromQueryAndBody url 是排查时定位业务入口的线索，两种传法都得支持：
+// 请求体字段（批量写法）与查询参数（裸数组没有包裹层，只能走查询参数）。
+func TestReportURLFromQueryAndBody(t *testing.T) {
+	c, done := newTestController(t)
+	defer done()
+
+	cases := []struct {
+		name    string
+		traceID string
+		query   string
+		body    string
+		want    string
+	}{
+		{
+			name:    "请求体字段",
+			traceID: "t-url-body",
+			body:    `{"url":"https://shop.example.com/order/confirm","events":[{"trace_id":"t-url-body","level":"info","module":"m","event":"end"}]}`,
+			want:    "https://shop.example.com/order/confirm",
+		},
+		{
+			name:    "裸数组只能走查询参数",
+			traceID: "t-url-query",
+			query:   "https://shop.example.com/pay?order=1&from=app",
+			body:    `[{"trace_id":"t-url-query","level":"info","module":"m","event":"end"}]`,
+			want:    "https://shop.example.com/pay?order=1&from=app",
+		},
+		{
+			name:    "请求体优先于查询参数",
+			traceID: "t-url-priority",
+			query:   "https://ignored.example.com",
+			body:    `{"url":"https://shop.example.com/win","events":[{"trace_id":"t-url-priority","level":"info","module":"m","event":"end"}]}`,
+			want:    "https://shop.example.com/win",
+		},
+		{
+			name:    "都没传时留空",
+			traceID: "t-url-none",
+			body:    `{"events":[{"trace_id":"t-url-none","level":"info","module":"m","event":"end"}]}`,
+			want:    "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := "/api/traces/report"
+			if tc.query != "" {
+				path += "?url=" + url.QueryEscape(tc.query)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(tc.body))
+			rec := httptest.NewRecorder()
+			c.ReportEvents(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("report: status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+			}
+
+			waitForTrace(t, c, tc.traceID)
+
+			getReq := httptest.NewRequest(http.MethodGet, "/api/traces/"+tc.traceID, nil)
+			getReq.SetPathValue("trace_id", tc.traceID)
+			getRec := httptest.NewRecorder()
+			c.GetTraceJSON(getRec, getReq)
+			if getRec.Code != http.StatusOK {
+				t.Fatalf("get trace: status = %d (%s)", getRec.Code, getRec.Body.String())
+			}
+
+			var detail model.TraceDetail
+			if err := json.Unmarshal(getRec.Body.Bytes(), &detail); err != nil {
+				t.Fatalf("decode detail: %v (%s)", err, getRec.Body.String())
+			}
+			if detail.Trace.URL != tc.want {
+				t.Fatalf("url = %q, want %q", detail.Trace.URL, tc.want)
+			}
+		})
+	}
+}
+
+// TestClampURL 超长 url 截断而不是报错 —— 不能因为一个字段把整批事件一起拒掉。
+func TestClampURL(t *testing.T) {
+	long := "https://example.com/?q=" + strings.Repeat("a", 4000)
+	if got := clampURL(long); got != long[:maxReportURLRunes] {
+		t.Errorf("long url was not truncated to %d runes, got %d", maxReportURLRunes, len(got))
+	}
+
+	short := "  https://example.com/order  "
+	if got := clampURL(short); got != "https://example.com/order" {
+		t.Errorf("clampURL should trim spaces and keep short urls intact, got %q", got)
 	}
 }
 

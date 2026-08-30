@@ -112,6 +112,7 @@ const swaggerDoc = `{
         "tags": ["traces"],
         "summary": "上报链路事件",
         "parameters": [
+          { "type": "string", "name": "url", "in": "query", "description": "链路的业务入口地址（页面 URL 或接口地址），记到 traces.url。裸数组 body 只能用它传；请求体里的 url 优先" },
           {
             "description": "事件数组，也支持 {\"events\":[...]} 形式",
             "name": "body",
@@ -187,6 +188,7 @@ const swaggerDoc = `{
     "model.ReportRequest": {
       "type": "object",
       "properties": {
+        "url": { "type": "string", "description": "链路的业务入口地址" },
         "events": {
           "type": "array",
           "items": { "$ref": "#/definitions/model.TraceEvent" }
@@ -205,7 +207,8 @@ const swaggerDoc = `{
         "event": { "type": "string" },
         "message": { "type": "string" },
         "params": { "type": "string", "description": "JSON 对象字符串" },
-        "error_message": { "type": "string" }
+        "error_message": { "type": "string" },
+        "url": { "type": "string", "description": "上报携带的业务入口地址。仅用于把值带进链路，不落事件表" }
       }
     },
     "model.Trace": {
@@ -214,6 +217,7 @@ const swaggerDoc = `{
         "id": { "type": "integer" },
         "trace_id": { "type": "string" },
         "service_name": { "type": "string" },
+        "url": { "type": "string", "description": "业务入口地址" },
         "status": { "type": "string" },
         "start_time": { "type": "string", "format": "date-time" },
         "end_time": { "type": "string", "format": "date-time" },
