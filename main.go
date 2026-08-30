@@ -44,11 +44,6 @@ func main() {
 	db := config.NewDatabase()
 	logger.Debug("database connected")
 
-	userRepo := repository.NewUserRepository(db)
-	userService := service.NewUserService(userRepo)
-	userController := controller.NewUserController(userService)
-	logger.Debug("user components initialized")
-
 	statusService := service.NewStatusService()
 	statusController := controller.NewStatusController(statusService)
 
@@ -78,7 +73,7 @@ func main() {
 		}
 	}
 
-	r := router.NewRouter(userController, statusController, traceController)
+	r := router.NewRouter(statusController, traceController)
 
 	serverCfg := config.GetServerConfig()
 	srv := &http.Server{

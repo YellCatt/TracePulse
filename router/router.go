@@ -16,7 +16,6 @@ import (
 // Go 1.22 的 http.ServeMux 支持方法 + 路径参数，且「更具体的字面量路径」优先于
 // 通配段，因此 /api/traces/stats 会先于 /api/traces/{trace_id} 命中。
 func NewRouter(
-	userController *controller.UserController,
 	statusController *controller.StatusController,
 	traceController *controller.TraceController,
 ) http.Handler {
@@ -44,13 +43,6 @@ func NewRouter(
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/traces", http.StatusFound)
 	})
-
-	// ---------------- 用户 ----------------
-	mux.HandleFunc("POST /api/users", userController.CreateUser)
-	mux.HandleFunc("GET /api/users", userController.GetAllUsers)
-	mux.HandleFunc("GET /api/users/{id}", userController.GetUserByID)
-	mux.HandleFunc("PUT /api/users/{id}", userController.UpdateUser)
-	mux.HandleFunc("DELETE /api/users/{id}", userController.DeleteUser)
 
 	// ---------------- 文档 ----------------
 	mux.Handle("/swagger/", httpSwagger.Handler(
@@ -189,151 +181,9 @@ const swaggerDoc = `{
         "summary": "运行时指标",
         "responses": { "200": { "description": "Success" } }
       }
-    },
-    "/api/users": {
-      "get": {
-        "description": "Get all users",
-        "consumes": ["application/json"],
-        "produces": ["application/json"],
-        "tags": ["users"],
-        "summary": "Get all users",
-        "responses": {
-          "200": {
-            "description": "Success",
-            "schema": {
-              "type": "array",
-              "items": { "$ref": "#/definitions/model.User" }
-            }
-          }
-        }
-      },
-      "post": {
-        "description": "Create a new user",
-        "consumes": ["application/json"],
-        "produces": ["application/json"],
-        "tags": ["users"],
-        "summary": "Create user",
-        "parameters": [
-          {
-            "description": "User object",
-            "name": "user",
-            "in": "body",
-            "required": true,
-            "schema": { "$ref": "#/definitions/model.CreateUserRequest" }
-          }
-        ],
-        "responses": {
-          "201": {
-            "description": "Created",
-            "schema": { "$ref": "#/definitions/model.User" }
-          },
-          "400": { "description": "Bad Request" }
-        }
-      }
-    },
-    "/api/users/{id}": {
-      "get": {
-        "description": "Get user by ID",
-        "consumes": ["application/json"],
-        "produces": ["application/json"],
-        "tags": ["users"],
-        "summary": "Get user",
-        "parameters": [
-          {
-            "type": "integer",
-            "description": "User ID",
-            "name": "id",
-            "in": "path",
-            "required": true
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "schema": { "$ref": "#/definitions/model.User" }
-          },
-          "404": { "description": "Not Found" }
-        }
-      },
-      "put": {
-        "description": "Update user",
-        "consumes": ["application/json"],
-        "produces": ["application/json"],
-        "tags": ["users"],
-        "summary": "Update user",
-        "parameters": [
-          {
-            "type": "integer",
-            "description": "User ID",
-            "name": "id",
-            "in": "path",
-            "required": true
-          },
-          {
-            "description": "User object",
-            "name": "user",
-            "in": "body",
-            "required": true,
-            "schema": { "$ref": "#/definitions/model.UpdateUserRequest" }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "schema": { "$ref": "#/definitions/model.User" }
-          },
-          "404": { "description": "Not Found" }
-        }
-      },
-      "delete": {
-        "description": "Delete user",
-        "consumes": ["application/json"],
-        "produces": ["application/json"],
-        "tags": ["users"],
-        "summary": "Delete user",
-        "parameters": [
-          {
-            "type": "integer",
-            "description": "User ID",
-            "name": "id",
-            "in": "path",
-            "required": true
-          }
-        ],
-        "responses": {
-          "204": { "description": "No Content" },
-          "404": { "description": "Not Found" }
-        }
-      }
     }
   },
   "definitions": {
-    "model.CreateUserRequest": {
-      "type": "object",
-      "properties": {
-        "name": { "type": "string" },
-        "age": { "type": "integer" }
-      },
-      "required": ["name", "age"]
-    },
-    "model.UpdateUserRequest": {
-      "type": "object",
-      "properties": {
-        "name": { "type": "string" },
-        "age": { "type": "integer" }
-      }
-    },
-    "model.User": {
-      "type": "object",
-      "properties": {
-        "ID": { "type": "integer" },
-        "CreatedAt": { "type": "string", "format": "date-time" },
-        "UpdatedAt": { "type": "string", "format": "date-time" },
-        "DeletedAt": { "type": "string", "format": "date-time" },
-        "name": { "type": "string" },
-        "age": { "type": "integer" }
-      }
-    },
     "model.ReportRequest": {
       "type": "object",
       "properties": {

@@ -480,21 +480,17 @@ TracePulse/
 ├── controller/          # HTTP 处理层：JSON API + 页面渲染
 │   ├── trace_controller.go
 │   ├── templates.go        # 页面模板（HTML + CSS，零依赖）
-│   ├── user_controller.go
 │   └── status_controller.go
 ├── service/             # 业务逻辑层
 │   ├── trace_service.go    # 链路聚合、落盘、TTL、清理
 │   ├── alert_service.go    # 告警判定、去重、限流、发信
 │   ├── alert_template.go   # 告警邮件模板
 │   ├── demo_seed.go        # 首次启动的演示数据
-│   ├── user_service.go
 │   └── status_service.go
 ├── repository/          # 数据访问层
-│   ├── trace_repository.go
-│   └── user_repository.go
+│   └── trace_repository.go
 ├── model/               # 数据模型与请求结构
 │   ├── trace.go
-│   ├── user.go
 │   └── status.go
 ├── router/              # 路由注册与内嵌 Swagger 定义
 ├── view/                # 展示层格式化（网页与邮件共用）
@@ -516,23 +512,13 @@ TracePulse/
 
 ## 附带接口
 
-除链路追踪外，还保留了模板自带的两个模块：
-
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | /health | 健康检查，返回 `{"status":"ok","message":"Service is running"}` |
 | GET | /status | 系统监控：CPU、内存、网络速率、各磁盘 IO、运行时长 |
-| GET | /api/users | 用户列表 |
-| POST | /api/users | 创建用户 |
-| GET | /api/users/{id} | 查询用户 |
-| PUT | /api/users/{id} | 更新用户 |
-| DELETE | /api/users/{id} | 删除用户 |
 
 ```bash
 curl http://localhost:8086/status
-curl -X POST http://localhost:8086/api/users \
-  -H "Content-Type: application/json" \
-  -d '{"name":"John","age":30}'
 ```
 
 `/status` 返回示例（容量单位为 KB，速率为 KB/s，具体见 `units` 字段）：

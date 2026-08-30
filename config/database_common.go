@@ -19,7 +19,7 @@ import (
 func initDatabase(db *gorm.DB) {
 	applyPragmas(db)
 
-	if err := db.AutoMigrate(&model.User{}, &model.Trace{}, &model.TraceEvent{}); err != nil {
+	if err := db.AutoMigrate(&model.Trace{}, &model.TraceEvent{}); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
 
