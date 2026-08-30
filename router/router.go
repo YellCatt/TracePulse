@@ -109,7 +109,7 @@ const swaggerDoc = `{
     "contact": {},
     "version": "1.0"
   },
-  "host": "localhost:8084",
+  "host": "localhost:8086",
   "basePath": "/",
   "paths": {
     "/api/traces/report": {

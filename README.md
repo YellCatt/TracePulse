@@ -12,7 +12,9 @@
 - **零依赖前端**：检索页与详情页服务端渲染，手机浏览器无需 JS 也能排查
 - **告警不炸群**：同链路同原因去重 + 全局最小间隔限流 + 队列丢弃聚合汇总
 - **跨平台**：默认 `modernc.org/sqlite`（纯 Go 无 CGO）出静态单文件；MIPS 路由器自动切到 CGO 版 `mattn/go-sqlite3`，极路由可直接跑
-- **开箱即用**：配置文件缺失自动生成，字段缺失才自动补全并回写（字段齐全时不动你的文件，注释得以保留）
+- **日志按需分流**：三种输出模式（按级别分文件 / 分文件且向上叠加 / 单一文件）配合级别白名单，只要关心的那部分日志
+- **开箱即用**：配置文件缺失自动生成，字段缺失才自动补全并回写（字段齐全时不动你的文件，注释得以保留）；首次启动自动灌入演示数据，打开页面就有东西可看
+- **路由器免运维**：`startup.sh` 守护脚本自带崩溃重启、定时自更新与热替换
 
 ## 快速开始
 
@@ -29,16 +31,21 @@ go build -o tracepulse
 
 首次运行会在 `config/config.yaml` 生成完整配置文件（含全部默认值），按需修改后重启即可。
 
+> **注意**：配置与数据库都按**相对工作目录**解析，所以要在项目根目录下启动，否则会重新生成一份空配置并新建一个空库（表现是"改了配置没生效 / 数据不见了"）。用 systemd 或守护脚本部署时记得设 `WorkingDirectory`。
+
 ### 访问
 
 | 入口 | 地址 |
 |------|------|
-| 链路检索页 | http://localhost:8084/traces |
-| 链路详情页 | http://localhost:8084/trace/{trace_id} |
-| Swagger 文档 | http://localhost:8084/swagger/index.html |
-| 健康检查 | http://localhost:8084/health |
+| 链路检索页 | http://localhost:8086/traces |
+| 链路详情页 | http://localhost:8086/trace/{trace_id} |
+| Swagger 文档 | http://localhost:8086/swagger/index.html |
+| 健康检查 | http://localhost:8086/health |
+| 系统监控 | http://localhost:8086/status |
 
 根路径 `/` 会重定向到 `/traces`。
+
+首次启动若库里还没有任何链路，会自动灌入一批演示数据（覆盖 ok / warn / error / timeout 四种状态），打开页面即可看到效果，无需先接上报。正式部署在配置里把 `demo.disable` 设为 `true` 关闭。
 
 ## 上报协议
 
@@ -48,7 +55,7 @@ go build -o tracepulse
 
 ```bash
 # 写法一：批量上报（推荐）
-curl -X POST http://localhost:8084/api/traces/report \
+curl -X POST http://localhost:8086/api/traces/report \
   -H "Content-Type: application/json" \
   -d '{
     "events": [
@@ -89,7 +96,7 @@ curl -X POST http://localhost:8084/api/traces/report \
 
 ```bash
 # 写法二：裸数组（单条上报更省事）
-curl -X POST http://localhost:8084/api/traces/report \
+curl -X POST http://localhost:8086/api/traces/report \
   -H "Content-Type: application/json" \
   -d '[{"trace_id":"req-7f3a91","level":"info","module":"pay","event":"start","message":"开始支付"}]'
 ```
@@ -165,13 +172,13 @@ curl -X POST http://localhost:8084/api/traces/report \
 
 ```bash
 # 最近一小时内的失败链路
-curl "http://localhost:8084/api/traces?status=error&start_time=1h&page_size=50"
+curl "http://localhost:8086/api/traces?status=error&start_time=1h&page_size=50"
 
 # 耗时超过 3 秒的慢调用
-curl "http://localhost:8084/api/traces?min_duration_ms=3000"
+curl "http://localhost:8086/api/traces?min_duration_ms=3000"
 
 # 按关键词模糊搜索
-curl "http://localhost:8084/api/traces?keyword=deadlock"
+curl "http://localhost:8086/api/traces?keyword=deadlock"
 ```
 
 响应示例：
@@ -202,7 +209,7 @@ curl "http://localhost:8084/api/traces?keyword=deadlock"
 ### GET /api/traces/{trace_id}
 
 ```bash
-curl http://localhost:8084/api/traces/req-7f3a91
+curl http://localhost:8086/api/traces/req-7f3a91
 ```
 
 返回 `{"trace":{...},"events":[...]}`，事件按时间正序。未找到返回 404。
@@ -212,7 +219,7 @@ curl http://localhost:8084/api/traces/req-7f3a91
 运行时指标，用于观测队列水位、判断是否需要调大队列或扩容：
 
 ```bash
-curl http://localhost:8084/api/traces/stats
+curl http://localhost:8086/api/traces/stats
 ```
 
 ```json
@@ -272,15 +279,19 @@ curl http://localhost:8084/api/traces/stats
 
 内网自签证书可设 `insecure_skip_verify: true`。
 
-邮件中的「查看详情」链接由 `alert.public_url` 生成，部署到服务器后记得改成能被收件人访问的地址，例如 `http://10.0.0.5:8084`。
+邮件中的「查看详情」链接由 `alert.public_url` 生成，部署到服务器后记得改成能被收件人访问的地址，例如 `http://10.0.0.5:8086`。
 
 ## 配置说明
 
-首次运行会自动生成完整的 `config/config.yaml`：
+配置文件路径固定为 `config/config.yaml`（相对工作目录）。首次运行自动生成完整配置。
+
+**配置文件的写入时机**：只有当配置里**缺字段**时，程序才会回写补全默认值——此时会重排格式并丢掉你手写的注释（YAML 序列化的固有限制）。字段齐全时不动文件，注释可以放心保留。因此新增配置字段时，记得同步补进 `config.yaml`，否则注释会被抹掉一次。
+
+完整示例（即仓库中 `config/config.yaml` 的内容，省略注释）：
 
 ```yaml
 server:
-  port: 8084
+  port: 8086
   read_timeout_seconds: 30
   write_timeout_seconds: 60
   shutdown_timeout_seconds: 20
@@ -324,20 +335,23 @@ alert:
     - warn
     - timeout
     - queue_drop
-  public_url: http://localhost:8084
+  public_url: http://localhost:8086
   slow_threshold_ms: 0
   timeout_seconds: 15
   dedup_seconds: 300
   min_interval_seconds: 60
   max_events_in_mail: 500
   queue_size: 256
+demo:
+  disable: false
+  force: false
 ```
 
 ### server
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
-| `port` | 监听端口 | 8084 |
+| `port` | 监听端口 | 8086 |
 | `read_timeout_seconds` | 读超时 | 30 |
 | `write_timeout_seconds` | 写超时 | 60 |
 | `shutdown_timeout_seconds` | 优雅关闭等待上限 | 20 |
@@ -400,13 +414,22 @@ alert:
 | `insecure_skip_verify` | 跳过证书校验，仅建议内网自签场景 | false |
 | `recipients` | 收件人列表 | admin@example.com |
 | `triggers` | 触发条件列表 | error, warn, timeout, queue_drop |
-| `public_url` | 邮件「查看详情」链接的 base URL | http://localhost:8084 |
+| `public_url` | 邮件「查看详情」链接的 base URL | http://localhost:8086 |
 | `slow_threshold_ms` | 慢调用阈值（毫秒），0 表示关闭 | 0 |
 | `timeout_seconds` | 单次发信超时 | 15 |
 | `dedup_seconds` | 去重窗口（秒），显式设 0 关闭去重 | 300 |
 | `min_interval_seconds` | 全局最小发信间隔 | 60 |
 | `max_events_in_mail` | 邮件中最多附带的事件条数 | 500 |
 | `queue_size` | 告警队列容量 | 256 |
+
+### demo
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| `disable` | 关闭启动时的演示数据写入，**正式部署建议设为 true** | false |
+| `force` | 即使库里已有链路也再灌一批，用于反复演示 | false |
+
+演示数据的 `trace_id` 带启动时间戳，不会撞上 `traces.trace_id` 的唯一索引；写入走 repository 直连，**不经过队列与 ndjson 兜底**，更重要的是不会触发告警（否则 error / timeout 状态会真的往外发邮件）。
 
 ## 架构
 
@@ -449,18 +472,21 @@ HTTP 上报 ──► 非阻塞队列 ──► 内存聚合（按 trace_id）�
 TracePulse/
 ├── main.go              # 入口：组装各层并启动 HTTP 服务
 ├── config/              # 配置加载、默认值补全、数据库与索引
-│   ├── config.go
-│   ├── database.go
-│   └── config.yaml
+│   ├── config.go           # 配置结构、默认值、缺失字段回写
+│   ├── config.yaml         # 运行期读取的配置文件
+│   ├── database.go         # 默认（纯 Go）驱动
+│   ├── database_cgo.go     # MIPS 架构专用 CGO 驱动（build tag 切换）
+│   └── database_common.go  # 两种驱动共用的初始化、索引、清理逻辑
 ├── controller/          # HTTP 处理层：JSON API + 页面渲染
 │   ├── trace_controller.go
-│   ├── templates.go     # 页面模板
+│   ├── templates.go        # 页面模板（HTML + CSS，零依赖）
 │   ├── user_controller.go
 │   └── status_controller.go
 ├── service/             # 业务逻辑层
 │   ├── trace_service.go    # 链路聚合、落盘、TTL、清理
 │   ├── alert_service.go    # 告警判定、去重、限流、发信
 │   ├── alert_template.go   # 告警邮件模板
+│   ├── demo_seed.go        # 首次启动的演示数据
 │   ├── user_service.go
 │   └── status_service.go
 ├── repository/          # 数据访问层
@@ -472,8 +498,9 @@ TracePulse/
 │   └── status.go
 ├── router/              # 路由注册与内嵌 Swagger 定义
 ├── view/                # 展示层格式化（网页与邮件共用）
-├── logger/              # Zap 日志
-└── docs/                # Swagger 文档注册
+├── logger/              # Zap 日志：三种输出模式 + 级别白名单
+├── docs/                # Swagger 文档注册
+└── startup.sh           # OpenWrt 路由器守护脚本（自启动 / 自更新 / 崩溃重启）
 ```
 
 ## 技术栈
@@ -493,7 +520,7 @@ TracePulse/
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | /health | 健康检查 |
+| GET | /health | 健康检查，返回 `{"status":"ok","message":"Service is running"}` |
 | GET | /status | 系统监控：CPU、内存、网络速率、各磁盘 IO、运行时长 |
 | GET | /api/users | 用户列表 |
 | POST | /api/users | 创建用户 |
@@ -502,10 +529,23 @@ TracePulse/
 | DELETE | /api/users/{id} | 删除用户 |
 
 ```bash
-curl http://localhost:8084/status
-curl -X POST http://localhost:8084/api/users \
+curl http://localhost:8086/status
+curl -X POST http://localhost:8086/api/users \
   -H "Content-Type: application/json" \
   -d '{"name":"John","age":30}'
+```
+
+`/status` 返回示例（容量单位为 KB，速率为 KB/s，具体见 `units` 字段）：
+
+```json
+{
+  "cpu": {"usage": 12.5, "count": 8, "vendor": "GenuineIntel", "model": "...", "mhz": 2600, "cache_size": 8192},
+  "memory": {"total": 16777216, "used": 8388608, "free": 4194304, "available": 12582912, "usage": 50},
+  "network": {"bytes_recv": 1048576, "bytes_sent": 524288, "recv_speed": 12.3, "send_speed": 4.5},
+  "disk": [{"mountpoint": "C:", "total": 524288000, "used": 262144000, "free": 262144000, "usage": 50, "read_speed": 0, "write_speed": 128.5}],
+  "uptime": 86400,
+  "units": {"cpu": "核", "cpu_usage": "%", "memory": "KB", "memory_usage": "%", "network": "KB", "speed": "KB/s", "disk": "KB", "disk_usage": "%", "uptime": "秒"}
+}
 ```
 
 ## 编译
@@ -553,6 +593,22 @@ CGO_ENABLED=1 GOOS=linux GOARCH=mipsle GOMIPS=softfloat \
 - 想在 Windows 上交叉编译，可用 WSL / Docker 跑上述命令，宿主 gcc 编不了 MIPS 目标。
 - 体积可再压缩：加 `-tags sqlite_omit_load_extension` 关掉 SQLite 扩展加载，或用 `upx --best`（MIPS 需 upx 支持该架构）。
 
+### 路由器守护脚本
+
+仓库根目录的 `startup.sh` 是给 OpenWrt 用的守护脚本，把二进制丢上去就能长期跑：
+
+- **自更新**：定时从 GitHub Release 下载，和当前二进制 `cmp` 比对，内容不同才热替换重启（相同则不重启，避免无谓抖动）
+- **先起后更**：本地已有二进制时先启动、再后台检查更新，下载失败不会阻塞启动
+- **崩溃自愈**：进程退出后指数退避重启（5s 起，上限 300s）
+- **自愈目录**：插件目录不可写时自动退到 `/tmp`；日志目录被删会重建，否则 `>>` 重定向失败会导致进程根本拉不起来
+- **防重复启动**：PID 文件 + `kill -0` 探测，避免起出两个实例抢同一个端口
+
+```sh
+sh startup.sh          # 前台运行，Ctrl+C 优雅退出
+```
+
+脚本顶部的配置区可直接改：`PLUGIN_DIR`（安装目录）、`DOWNLOAD_URL`（更新源）、`UPDATE_INTERVAL`（检查间隔，默认 3 小时）。
+
 ## 优雅关闭
 
 收到 `SIGINT` / `SIGTERM` 后按依赖顺序收敛：停止接收新请求 → 排空队列并把内存中的链路全部落盘 → 停止告警协程。全程受 `server.shutdown_timeout_seconds` 约束，超时则强制退出。
@@ -563,7 +619,16 @@ CGO_ENABLED=1 GOOS=linux GOARCH=mipsle GOMIPS=softfloat \
 go test ./...
 ```
 
-覆盖配置补全、上报协议容错、过滤查询、页面 HTML 转义、告警去重与模板渲染等。测试使用临时目录中的真实 SQLite 库，走与生产完全相同的表结构。
+测试使用临时目录中的真实 SQLite 库，走与生产完全相同的表结构。覆盖范围：
+
+| 包 | 覆盖内容 |
+|----|----------|
+| `config` | 老配置字段补全、回写行为、**仓库配置完整性**（缺字段会在启动时抹掉注释，用测试守住） |
+| `logger` | 三种输出模式的实际文件产物、级别白名单过滤、阈值不建空文件、非法配置拒绝 |
+| `service` | 链路聚合与增量合并、TTL 强制落盘、告警去重与限流、告警关闭时静默 |
+| `controller` | 上报协议容错、参数校验、过滤查询、页面 HTML 转义 |
+| `repository` | 多条件过滤、分页、时间范围 |
+| `view` | 时间/耗时格式化、长文本截断 |
 
 ## 许可证
 
