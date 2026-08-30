@@ -56,9 +56,9 @@ type LogConfig struct {
 	Path  string `yaml:"path"`
 	Level string `yaml:"level"`
 	// Mode 输出模式：
-	//   split（默认）按级别分文件，每个文件只含该级别，fatal 归入 error.log；
-	//   range  按级别分文件，每个文件含该级别及以上；
-	//   single 全部日志写入同一个 app.log，只按级别过滤。
+	//   single（默认）全部日志写入同一个 app.log，只按级别过滤；
+	//   split  按级别分文件，每个文件只含该级别，fatal 归入 error.log；
+	//   range  按级别分文件，每个文件含该级别及以上。
 	Mode string `yaml:"mode"`
 	// Levels 级别白名单，非空时只输出列出的级别（例如 [warn, error]），此时 level 只作兜底。
 	// 用切片而非字符串，是为了让"字段缺失"与"显式只要这几个级别"区分开。
@@ -147,8 +147,8 @@ type DemoConfig struct {
 
 var cfg Config
 
-// defaultLogMode 日志默认输出模式：按级别分文件，每个文件只含该级别。
-const defaultLogMode = "split"
+// defaultLogMode 日志默认输出模式：全部日志写入同一个 app.log。
+const defaultLogMode = "single"
 
 // LoadConfig 读取配置；文件不存在则生成默认配置。
 func LoadConfig() {

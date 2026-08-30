@@ -52,7 +52,7 @@ log:
     #   range   按级别分文件，内容向上叠加：warn.log 里含 warn 及以上
     #   single  所有日志进同一个 app.log，只按级别过滤
     # 只为真正生效的级别建文件：level 是 info 时不会留下空的 debug.log。
-    mode: split
+    mode: single
     # 级别白名单：非空时只输出列出的级别，优先级高于 level。
     # 例：只想看告警和错误 -> [warn, error]
     # 可和 mode 组合，如 mode: single + levels: [warn, error] = 一个文件里只有告警和错误。
