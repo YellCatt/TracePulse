@@ -173,7 +173,126 @@ func TestReportURLFromQueryAndBody(t *testing.T) {
 	}
 }
 
-// TestClampURL 超长 url 截断而不是报错 —— 不能因为一个字段把整批事件一起拒掉。
+// TestReportServiceNameFromQueryAndBody 服务名与 url 一样，请求体字段与查询参数都要支持，
+// 且驼峰写法 serviceName 也要收下（前端 SDK 的自然写法）。
+func TestReportServiceNameFromQueryAndBody(t *testing.T) {
+	c, done := newTestController(t)
+	defer done()
+
+	cases := []struct {
+		name    string
+		traceID string
+		query   string
+		body    string
+		want    string
+	}{
+		{
+			name:    "请求体 snake_case",
+			traceID: "t-svc-body",
+			body:    `{"service_name":"order-service","events":[{"trace_id":"t-svc-body","level":"info","module":"m","event":"end"}]}`,
+			want:    "order-service",
+		},
+		{
+			name:    "请求体驼峰",
+			traceID: "t-svc-camel",
+			body:    `{"serviceName":"order-service","events":[{"trace_id":"t-svc-camel","level":"info","module":"m","event":"end"}]}`,
+			want:    "order-service",
+		},
+		{
+			name:    "裸数组走查询参数",
+			traceID: "t-svc-query",
+			query:   "pay-service",
+			body:    `[{"trace_id":"t-svc-query","level":"info","module":"m","event":"end"}]`,
+			want:    "pay-service",
+		},
+		{
+			name:    "请求体优先于查询参数",
+			traceID: "t-svc-priority",
+			query:   "ignored-service",
+			body:    `{"service_name":"order-service","events":[{"trace_id":"t-svc-priority","level":"info","module":"m","event":"end"}]}`,
+			want:    "order-service",
+		},
+		{
+			name:    "都不传时退化用 module",
+			traceID: "t-svc-module",
+			body:    `{"events":[{"trace_id":"t-svc-module","level":"info","module":"stock-service","event":"end"}]}`,
+			want:    "stock-service",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := "/api/traces/report"
+			if tc.query != "" {
+				path += "?service_name=" + url.QueryEscape(tc.query)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(tc.body))
+			rec := httptest.NewRecorder()
+			c.ReportEvents(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("report: status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+			}
+
+			waitForTrace(t, c, tc.traceID)
+
+			getReq := httptest.NewRequest(http.MethodGet, "/api/traces/"+tc.traceID, nil)
+			getReq.SetPathValue("trace_id", tc.traceID)
+			getRec := httptest.NewRecorder()
+			c.GetTraceJSON(getRec, getReq)
+			if getRec.Code != http.StatusOK {
+				t.Fatalf("get trace: status = %d (%s)", getRec.Code, getRec.Body.String())
+			}
+
+			var detail model.TraceDetail
+			if err := json.Unmarshal(getRec.Body.Bytes(), &detail); err != nil {
+				t.Fatalf("decode detail: %v (%s)", err, getRec.Body.String())
+			}
+			if detail.Trace.ServiceName != tc.want {
+				t.Fatalf("service_name = %q, want %q", detail.Trace.ServiceName, tc.want)
+			}
+		})
+	}
+}
+
+// TestReportCarriesServiceAndURL 用户实际的上报形态：一次调用同时带上服务名与接口名，
+// 两者都要落到链路上。
+func TestReportCarriesServiceAndURL(t *testing.T) {
+	c, done := newTestController(t)
+	defer done()
+
+	body := `{"serviceName":"order-service","url":"/api/order/create","events":[
+		{"trace_id":"t-full","span_id":"span-1","level":"info","module":"order-service","event":"start","message":"订单创建开始"},
+		{"trace_id":"t-full","span_id":"span-2","parent_span_id":"span-1","level":"info","module":"order-service","event":"end","message":"订单创建完成"}
+	]}`
+
+	req := httptest.NewRequest(http.MethodPost, "/api/traces/report", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.ReportEvents(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report: status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+
+	waitForTrace(t, c, "t-full")
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/traces/t-full", nil)
+	getReq.SetPathValue("trace_id", "t-full")
+	getRec := httptest.NewRecorder()
+	c.GetTraceJSON(getRec, getReq)
+
+	var detail model.TraceDetail
+	if err := json.Unmarshal(getRec.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("decode detail: %v (%s)", err, getRec.Body.String())
+	}
+	if detail.Trace.ServiceName != "order-service" {
+		t.Errorf("service_name = %q, want %q", detail.Trace.ServiceName, "order-service")
+	}
+	if detail.Trace.URL != "/api/order/create" {
+		t.Errorf("url = %q, want %q", detail.Trace.URL, "/api/order/create")
+	}
+}
+
+// TestClampURL 超长字段截断而不是报错 —— 不能因为一个字段把整批事件一起拒掉。
 func TestClampURL(t *testing.T) {
 	long := "https://example.com/?q=" + strings.Repeat("a", 4000)
 	if got := clampURL(long); got != long[:maxReportURLRunes] {
@@ -183,6 +302,10 @@ func TestClampURL(t *testing.T) {
 	short := "  https://example.com/order  "
 	if got := clampURL(short); got != "https://example.com/order" {
 		t.Errorf("clampURL should trim spaces and keep short urls intact, got %q", got)
+	}
+
+	if got := clampServiceName("  " + strings.Repeat("s", 500) + "  "); len([]rune(got)) != maxReportServiceRunes {
+		t.Errorf("service name was not truncated to %d runes, got %d", maxReportServiceRunes, len([]rune(got)))
 	}
 }
 

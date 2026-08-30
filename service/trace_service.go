@@ -30,11 +30,23 @@ import (
 	"go.uber.org/zap"
 )
 
+// ReportMeta 一次上报请求携带的链路级元信息。
+//
+// 单独成结构体而不是摊成 ReportEvents 的参数列表：这类请求级字段还会继续加
+// （url / service_name 只是开头），摊平会让调用方每次都跟着改签名，且多个
+// 同类型 string 参数相邻时极易传错位置。
+type ReportMeta struct {
+	// URL 业务入口地址（接口名），记到 traces.url。
+	URL string
+	// ServiceName 服务名，记到 traces.service_name。为空时退化用事件的 module。
+	ServiceName string
+}
+
 // TraceService 链路服务接口。
 type TraceService interface {
-	// ReportEvents 上报一批事件。url 是这次上报的业务入口地址，会记到事件所属
-	// 的链路上；事件自带 url 时以事件为准，url 为空则不改动已有值。
-	ReportEvents(events []model.TraceEvent, url string) error
+	// ReportEvents 上报一批事件，meta 是这次上报的链路级元信息。
+	// 事件自带 url / service_name 时以事件为准，meta 只作兜底。
+	ReportEvents(events []model.TraceEvent, meta ReportMeta) error
 	GetTrace(traceID string) (*model.Trace, []model.TraceEvent, error)
 	ListTraces(filter model.TraceFilter) (*model.TraceListResult, error)
 	Stats() TraceStats
@@ -61,6 +73,13 @@ const orphanGracePeriod = 10 * time.Minute
 type activeTrace struct {
 	trace  *model.Trace
 	events []model.TraceEvent
+
+	// serviceFromModule 当前 service_name 是否由事件的 module 推导而来。
+	//
+	// 用来让"显式上报的服务名"盖掉"module 推导值"：长链路分批上报时，可能第一批
+	// 还没拿到服务名（只有 module），后续批次才带上。反向则不覆盖 —— 服务名一旦
+	// 确定就不该被后来的值反复改写。
+	serviceFromModule bool
 }
 
 type traceService struct {
@@ -141,12 +160,12 @@ func NewTraceService(repo repository.TraceRepository, alertSvc AlertService, cfg
 
 // ------------------------------------------------------------------ 上报 ----
 
-// ReportEvents 接收一批事件，url 作为业务入口地址记到链路上。全程非阻塞，队列满则丢弃。
+// ReportEvents 接收一批事件，meta 里的链路级信息记到链路上。全程非阻塞，队列满则丢弃。
 //
-// url 的传递路径：HTTP 层 → 事件携带字段 → 队列 → 内存聚合 → traces.url。
-// 事件自己带了 url 时不覆盖，这样同一条链路分批上报、或一条链路跨多个入口时，
-// 都能各自留下线索（先到的生效，通常是 start 事件）。
-func (s *traceService) ReportEvents(events []model.TraceEvent, url string) error {
+// 传递路径：HTTP 层 → 事件携带字段 → 队列 → 内存聚合 → traces。
+// 事件自己带了值时以事件为准（这样同一条链路分批上报、或一条链路跨多个入口时
+// 都能各自留下线索），meta 只给没带值的事件兜底。
+func (s *traceService) ReportEvents(events []model.TraceEvent, meta ReportMeta) error {
 	if s.closed.Load() {
 		return errors.New("trace service is shutting down")
 	}
@@ -159,9 +178,11 @@ func (s *traceService) ReportEvents(events []model.TraceEvent, url string) error
 			// 没有 trace_id 的事件无法聚合，直接落兜底日志后跳过。
 			e.TraceID = "unknown"
 		}
-		// 事件没自带 url 时，用本次请求级的 url 兜底。
 		if e.URL == "" {
-			e.URL = url
+			e.URL = meta.URL
+		}
+		if e.ServiceName == "" {
+			e.ServiceName = meta.ServiceName
 		}
 		now := time.Now()
 		if e.Timestamp.IsZero() {
@@ -322,19 +343,29 @@ func (s *traceService) addToActive(e model.TraceEvent) {
 
 	at, exists := s.active[e.TraceID]
 	if !exists {
+		// 显式服务名优先，缺省才退化用 module —— 老采集端只传 module 时行为不变。
+		serviceName := e.ServiceName
+		fromModule := false
+		if serviceName == "" {
+			serviceName = e.Module
+			fromModule = true
+		}
+
 		at = &activeTrace{
 			trace: &model.Trace{
 				TraceID:     e.TraceID,
-				ServiceName: e.Module,
+				ServiceName: serviceName,
 				Status:      model.TraceStatusOK,
 				StartTime:   e.Timestamp,
 				HasError:    false,
 			},
-			events: make([]model.TraceEvent, 0, 8),
+			events:            make([]model.TraceEvent, 0, 8),
+			serviceFromModule: fromModule,
 		}
 		s.active[e.TraceID] = at
 		logger.Debug("active trace created",
 			zap.String("trace_id", e.TraceID),
+			zap.String("service", serviceName),
 			zap.String("module", e.Module),
 			zap.String("event", e.Event),
 			zap.Int("active_total", len(s.active)),
@@ -344,6 +375,11 @@ func (s *traceService) addToActive(e model.TraceEvent) {
 	// 先到先得：链路的入口地址以首批事件为准，后续批次不覆盖已记录的值。
 	if at.trace.URL == "" && e.URL != "" {
 		at.trace.URL = e.URL
+	}
+	// 唯一例外：module 推导出的服务名会被显式上报值替换。
+	if at.serviceFromModule && e.ServiceName != "" {
+		at.trace.ServiceName = e.ServiceName
+		at.serviceFromModule = false
 	}
 
 	// 单条链路的事件数封顶，防止异常链路无限写撑爆内存和磁盘。

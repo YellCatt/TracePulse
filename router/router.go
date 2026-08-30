@@ -112,7 +112,8 @@ const swaggerDoc = `{
         "tags": ["traces"],
         "summary": "上报链路事件",
         "parameters": [
-          { "type": "string", "name": "url", "in": "query", "description": "链路的业务入口地址（页面 URL 或接口地址），记到 traces.url。裸数组 body 只能用它传；请求体里的 url 优先" },
+          { "type": "string", "name": "service_name", "in": "query", "description": "服务名，记到 traces.service_name。都不传时退化用首条事件的 module；请求体里的 service_name 优先" },
+          { "type": "string", "name": "url", "in": "query", "description": "业务入口地址 / 接口名，记到 traces.url。裸数组 body 只能用它传；请求体里的 url 优先" },
           {
             "description": "事件数组，也支持 {\"events\":[...]} 形式",
             "name": "body",
@@ -188,7 +189,8 @@ const swaggerDoc = `{
     "model.ReportRequest": {
       "type": "object",
       "properties": {
-        "url": { "type": "string", "description": "链路的业务入口地址" },
+        "url": { "type": "string", "description": "业务入口地址 / 接口名" },
+        "service_name": { "type": "string", "description": "服务名，也接受驼峰 serviceName" },
         "events": {
           "type": "array",
           "items": { "$ref": "#/definitions/model.TraceEvent" }
@@ -208,7 +210,8 @@ const swaggerDoc = `{
         "message": { "type": "string" },
         "params": { "type": "string", "description": "JSON 对象字符串" },
         "error_message": { "type": "string" },
-        "url": { "type": "string", "description": "上报携带的业务入口地址。仅用于把值带进链路，不落事件表" }
+        "url": { "type": "string", "description": "上报携带的业务入口地址。仅用于把值带进链路，不落事件表" },
+        "service_name": { "type": "string", "description": "上报携带的服务名，优先级高于 module。仅用于把值带进链路，不落事件表" }
       }
     },
     "model.Trace": {
@@ -217,7 +220,7 @@ const swaggerDoc = `{
         "id": { "type": "integer" },
         "trace_id": { "type": "string" },
         "service_name": { "type": "string" },
-        "url": { "type": "string", "description": "业务入口地址" },
+        "url": { "type": "string", "description": "业务入口地址 / 接口名" },
         "status": { "type": "string" },
         "start_time": { "type": "string", "format": "date-time" },
         "end_time": { "type": "string", "format": "date-time" },

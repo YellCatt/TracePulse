@@ -159,7 +159,7 @@ func TestShutdownFlushesInMemoryTraces(t *testing.T) {
 	if err := svc.ReportEvents([]model.TraceEvent{
 		{TraceID: "t-1", Timestamp: time.Now(), Level: model.LevelInfo, Module: "m", Event: "start"},
 		{TraceID: "t-1", Timestamp: time.Now(), Level: model.LevelError, Module: "m", Event: "boom", ErrorMessage: "kaput"},
-	}, ""); err != nil {
+	}, ReportMeta{}); err != nil {
 		t.Fatalf("report: %v", err)
 	}
 
@@ -196,7 +196,7 @@ func TestShutdownIsIdempotent(t *testing.T) {
 	svc.Shutdown()
 	svc.Shutdown()
 
-	if err := svc.ReportEvents([]model.TraceEvent{{TraceID: "t-x", Event: "e"}}, ""); err == nil {
+	if err := svc.ReportEvents([]model.TraceEvent{{TraceID: "t-x", Event: "e"}}, ReportMeta{}); err == nil {
 		t.Fatal("expected error when reporting after shutdown")
 	}
 }
@@ -212,7 +212,7 @@ func TestReportURLIsPersistedOnTrace(t *testing.T) {
 	const want = "https://shop.example.com/order/confirm?sku=A-01"
 	if err := svc.ReportEvents([]model.TraceEvent{
 		{TraceID: "t-url", Timestamp: time.Now(), Level: model.LevelInfo, Module: "order", Event: "start"},
-	}, want); err != nil {
+	}, ReportMeta{URL: want}); err != nil {
 		t.Fatalf("report: %v", err)
 	}
 
@@ -247,7 +247,7 @@ func TestReportEventURLWinsOverRequestURL(t *testing.T) {
 			TraceID: "t-fallback", Timestamp: time.Now(), Level: model.LevelInfo,
 			Module: "m", Event: "start",
 		},
-	}, "https://fallback.example.com/req"); err != nil {
+	}, ReportMeta{URL: "https://fallback.example.com/req"}); err != nil {
 		t.Fatalf("report: %v", err)
 	}
 
@@ -267,6 +267,91 @@ func TestReportEventURLWinsOverRequestURL(t *testing.T) {
 		if trace.URL != tc.want {
 			t.Fatalf("trace %s url = %q, want %q", tc.id, trace.URL, tc.want)
 		}
+	}
+}
+
+// TestReportServiceNamePriority 服务名的三级优先级：事件自带 > 请求级 > module 推导。
+// 老采集端只传 module 时必须照旧工作，这是不能打破的兼容底线。
+func TestReportServiceNamePriority(t *testing.T) {
+	svc, _, closeDB := newTestService(t, config.TraceConfig{
+		QueueSize: 100, TTLSeconds: 3600, FlushBatch: 1000, FlushMs: 100000, CleanupDays: 7,
+	})
+	defer closeDB()
+
+	now := time.Now()
+	// 事件自带 > 请求级：两条放在同一次上报里，验证 meta 不会盖掉事件自带的值。
+	if err := svc.ReportEvents([]model.TraceEvent{
+		{
+			TraceID: "t-svc-own", Timestamp: now, Level: model.LevelInfo,
+			Module: "module-a", Event: "start", ServiceName: "order-service",
+		},
+		{TraceID: "t-svc-meta", Timestamp: now, Level: model.LevelInfo, Module: "module-b", Event: "start"},
+	}, ReportMeta{ServiceName: "meta-service"}); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	// 请求级也为空时才退化用 module，必须单独一次上报才能构造出来。
+	if err := svc.ReportEvents([]model.TraceEvent{
+		{TraceID: "t-svc-module", Timestamp: now, Level: model.LevelInfo, Module: "pay-service", Event: "start"},
+	}, ReportMeta{}); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+
+	svc.Shutdown()
+
+	for _, tc := range []struct{ id, want string }{
+		{"t-svc-own", "order-service"},
+		{"t-svc-meta", "meta-service"},
+		{"t-svc-module", "pay-service"},
+	} {
+		trace, _, err := svc.GetTrace(tc.id)
+		if err != nil {
+			t.Fatalf("get trace %s: %v", tc.id, err)
+		}
+		if trace == nil {
+			t.Fatalf("trace %s was not persisted", tc.id)
+		}
+		if trace.ServiceName != tc.want {
+			t.Fatalf("trace %s service_name = %q, want %q", tc.id, trace.ServiceName, tc.want)
+		}
+	}
+}
+
+// TestReportServiceNameUpgradesModuleValue 长链路分批上报时，可能第一批还没拿到服务名
+// （只有 module），后续批次才带上。显式值必须能盖掉 module 推导值。
+func TestReportServiceNameUpgradesModuleValue(t *testing.T) {
+	svc, _, closeDB := newTestService(t, config.TraceConfig{
+		QueueSize: 100, TTLSeconds: 3600, FlushBatch: 1000, FlushMs: 100000, CleanupDays: 7,
+	})
+	defer closeDB()
+
+	now := time.Now()
+	ev := func(svcName string) model.TraceEvent {
+		return model.TraceEvent{
+			TraceID: "t-svc-late", Timestamp: now, Level: model.LevelInfo,
+			Module: "module-x", Event: "tick", ServiceName: svcName,
+		}
+	}
+
+	// 第一批：只有 module，服务名推导为 module-x。
+	if err := svc.ReportEvents([]model.TraceEvent{ev("")}, ReportMeta{}); err != nil {
+		t.Fatalf("report first batch: %v", err)
+	}
+	// 第二批：带上显式服务名。
+	if err := svc.ReportEvents([]model.TraceEvent{ev("inventory-service")}, ReportMeta{}); err != nil {
+		t.Fatalf("report second batch: %v", err)
+	}
+
+	svc.Shutdown()
+
+	trace, _, err := svc.GetTrace("t-svc-late")
+	if err != nil {
+		t.Fatalf("get trace: %v", err)
+	}
+	if trace == nil {
+		t.Fatal("trace was not persisted")
+	}
+	if trace.ServiceName != "inventory-service" {
+		t.Fatalf("service_name = %q, want explicit value to override module fallback", trace.ServiceName)
 	}
 }
 
@@ -293,7 +378,7 @@ func TestQueueFullDropsWithoutBlocking(t *testing.T) {
 	// 这样"队列被打满"是确定性的，而不是赌消费者够不够慢。
 	if err := svc.ReportEvents([]model.TraceEvent{
 		{TraceID: "t-trigger", Timestamp: time.Now(), Level: model.LevelInfo, Module: "m", Event: "tick"},
-	}, ""); err != nil {
+	}, ReportMeta{}); err != nil {
 		t.Fatalf("report trigger: %v", err)
 	}
 	select {
@@ -315,7 +400,7 @@ func TestQueueFullDropsWithoutBlocking(t *testing.T) {
 
 	done := make(chan error, 1)
 	start := time.Now()
-	go func() { done <- svc.ReportEvents(batch, "") }()
+	go func() { done <- svc.ReportEvents(batch, ReportMeta{}) }()
 
 	select {
 	case err := <-done:
@@ -360,7 +445,7 @@ func TestTTLForcesFlushOfStalledTrace(t *testing.T) {
 	stale := time.Now().Add(-10 * time.Second)
 	if err := svc.ReportEvents([]model.TraceEvent{
 		{TraceID: "t-stalled", Timestamp: stale, Level: model.LevelInfo, Module: "m", Event: "start"},
-	}, ""); err != nil {
+	}, ReportMeta{}); err != nil {
 		t.Fatalf("report: %v", err)
 	}
 
@@ -412,7 +497,7 @@ func TestListTracesFilters(t *testing.T) {
 		mk("t-err", model.LevelError, "payment", "pay_failed", 1500*time.Millisecond),
 		mk("t-warn", model.LevelWarn, "inventory", "low_stock", 80*time.Millisecond),
 	} {
-		if err := svc.ReportEvents(evs, ""); err != nil {
+		if err := svc.ReportEvents(evs, ReportMeta{}); err != nil {
 			t.Fatalf("report: %v", err)
 		}
 	}

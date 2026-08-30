@@ -89,13 +89,12 @@ type TraceEvent struct {
 	Message      string    `gorm:"type:text" json:"message"`
 	Params       string    `gorm:"type:text" json:"params"`
 	ErrorMessage string    `gorm:"type:text" json:"error_message"`
-	// URL 上报时携带的业务入口地址。
-	//
-	// 刻意标成 gorm:"-"：url 是链路级属性，聚合时会写到 traces.url，没必要在
-	// 事件表里每行重复存一份。这里只是借事件把值从 HTTP 层穿过异步队列带进聚合逻辑 ——
-	// 事件进队列后顺序会被打散，只有跟着事件走才能对上号。
-	URL       string    `gorm:"-" json:"url,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	// URL / ServiceName 是链路级属性（traces.url / traces.service_name），这里刻意
+	// 标成 gorm:"-"：事件表不必每行重复存一份，只是借事件把值穿过异步队列带到聚合逻辑。
+	// ServiceName 优先级高于 Module，缺省时才退化用 Module。
+	URL         string    `gorm:"-" json:"url,omitempty"`
+	ServiceName string    `gorm:"-" json:"service_name,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 func (TraceEvent) TableName() string { return "trace_events" }
@@ -113,6 +112,8 @@ func (e *TraceEvent) UnmarshalJSON(data []byte) error {
 	aux := struct {
 		*alias
 		Params json.RawMessage `json:"params"`
+		// 采集端（尤其是前端 SDK）习惯写驼峰，这里一并收下，与 snake_case 等价。
+		ServiceNameAlt string `json:"serviceName"`
 	}{alias: (*alias)(e)}
 
 	if err := json.Unmarshal(data, &aux); err != nil {
@@ -120,6 +121,9 @@ func (e *TraceEvent) UnmarshalJSON(data []byte) error {
 	}
 
 	e.Params = normalizeParams(aux.Params)
+	if e.ServiceName == "" {
+		e.ServiceName = aux.ServiceNameAlt
+	}
 	return nil
 }
 
@@ -198,11 +202,37 @@ func stringify(v interface{}) string {
 	}
 }
 
-// ReportRequest 上报请求体。支持 {"url":"...","events":[...]} 与裸数组 [...] 两种写法。
+// ReportRequest 上报请求体。支持 {"url":"...","service_name":"...","events":[...]}
+// 与裸数组 [...] 两种写法。
 type ReportRequest struct {
-	// URL 链路的业务入口地址。裸数组写法没有包裹层，改用查询参数 ?url= 传递。
-	URL    string       `json:"url"`
-	Events []TraceEvent `json:"events"`
+	// URL 链路的业务入口地址（接口名）。裸数组写法没有包裹层，改用查询参数 ?url= 传递。
+	URL string `json:"url"`
+	// ServiceName 服务名。裸数组写法改用查询参数 ?service_name= 传递。
+	// 都不传时退化用首条事件的 module，老采集端无需改动。
+	ServiceName string       `json:"service_name"`
+	Events      []TraceEvent `json:"events"`
+}
+
+// UnmarshalJSON 兼容 service_name 的驼峰写法。
+//
+// 与 TraceEvent 同理：snake_case 是本项目的主写法，但驼峰在前端 SDK 里太常见了，
+// 为了不让一个字段命名差异就丢掉整批事件，这里两种都收下。
+func (r *ReportRequest) UnmarshalJSON(data []byte) error {
+	// 用别名避免递归调用本方法。
+	type alias ReportRequest
+
+	aux := struct {
+		*alias
+		ServiceNameAlt string `json:"serviceName"`
+	}{alias: (*alias)(r)}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if r.ServiceName == "" {
+		r.ServiceName = aux.ServiceNameAlt
+	}
+	return nil
 }
 
 // TraceFilter 列表检索条件。

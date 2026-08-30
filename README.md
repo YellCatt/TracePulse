@@ -51,14 +51,23 @@ go build -o tracepulse
 
 ### POST /api/traces/report
 
-`url` 可选，表示这条链路对应的业务入口（页面 URL 或接口地址），会记到链路的 `url` 字段并在列表页 / 详情页展示。两种传法：
+两个可选的链路级字段：
+
+| 字段 | 含义 | 页面位置 |
+|------|------|----------|
+| `service_name` | 服务名 | 列表页「服务」列、详情页 Service |
+| `url` | 业务入口地址 / 接口名 | 列表页「接口名」列、详情页「接口名」 |
+
+各有两种传法：
 
 | 传法 | 适用 |
 |------|------|
-| 请求体字段 `"url"` | 批量写法。与 `events` 同级 |
-| 查询参数 `?url=` | 任意写法。**裸数组没有包裹层，只能用它传** |
+| 请求体字段 `"service_name"` / `"url"` | 批量写法。与 `events` 同级 |
+| 查询参数 `?service_name=` / `?url=` | 任意写法。**裸数组没有包裹层，只能用它传** |
 
-请求体优先于查询参数；都没传就留空，不影响事件入库。超过 2048 个字符会截断（不会因为一个过长的 url 拒掉整批事件）。
+请求体优先于查询参数。`url` 都没传就留空；`service_name` 都没传则退化用首条事件的 `module`——**只传 module 的老采集端行为不变**。超出长度上限会截断（`service_name` 128 字符、`url` 2048 字符），不会因为一个字段过长拒掉整批事件。
+
+字段命名 `snake_case` 与驼峰都接受，例如 `service_name` 与 `serviceName` 等价。
 
 请求体支持两种写法，任选其一：
 
@@ -67,7 +76,8 @@ go build -o tracepulse
 curl -X POST http://localhost:8086/api/traces/report \
   -H "Content-Type: application/json" \
   -d '{
-    "url": "https://shop.example.com/order/confirm?sku=A-01",
+    "serviceName": "order-service",
+    "url": "/api/order/create",
     "events": [
       {
         "trace_id": "req-7f3a91",
@@ -105,18 +115,18 @@ curl -X POST http://localhost:8086/api/traces/report \
 ```
 
 ```bash
-# 写法二：裸数组（单条上报更省事，url 走查询参数）
-curl -X POST 'http://localhost:8086/api/traces/report?url=https://shop.example.com/pay' \
+# 写法二：裸数组（单条上报更省事，链路级字段走查询参数）
+curl -X POST 'http://localhost:8086/api/traces/report?service_name=pay-service&url=/api/v1/pay/create' \
   -H "Content-Type: application/json" \
   -d '[{"trace_id":"req-7f3a91","level":"info","module":"pay","event":"start","message":"开始支付"}]'
 ```
 
-单条上报也可以继续用批量写法，把 `url` 放进请求体：
+单条上报也可以继续用批量写法，把链路级字段放进请求体：
 
 ```bash
 curl -X POST http://localhost:8086/api/traces/report \
   -H "Content-Type: application/json" \
-  -d '{"url":"/api/v1/pay/create","events":[{"trace_id":"req-7f3a91","level":"info","module":"pay","event":"start"}]}'
+  -d '{"service_name":"pay-service","url":"/api/v1/pay/create","events":[{"trace_id":"req-7f3a91","level":"info","module":"pay","event":"start"}]}'
 ```
 
 成功响应：
@@ -133,12 +143,13 @@ curl -X POST http://localhost:8086/api/traces/report \
 | `span_id` / `parent_span_id` | 否 | 跨度标识，用于在详情页还原调用层级 |
 | `timestamp` | 否 | RFC3339 时间，缺省为服务端当前时间 |
 | `level` | 否 | `trace`/`debug`/`info`/`warn`/`error`/`fatal`，缺省 `info` |
-| `module` | 否 | 模块名。**首条事件的 module 会作为整条链路的 service_name** |
+| `module` | 否 | 模块名。**未上报 `service_name` 时，首条事件的 module 会作为整条链路的 service_name** |
 | `event` | 否 | 事件名。`start` / `end` 为特殊值，收到 `end` 立即落盘 |
 | `message` | 否 | 事件描述 |
 | `params` | 否 | 附加参数，详见下方容错说明 |
 | `error_message` | 否 | 错误信息 |
 | `url` | 否 | 业务入口地址。**事件级字段，仅用于把值带进链路**，事件表不落这一列；同一条链路以首批上报的值为准 |
+| `service_name` | 否 | 服务名。同 `url`，只把值带进链路，优先级高于 `module` |
 
 `params` 容错：库里存的是字符串，但上报时写对象 / 数组 / 数字 / 布尔都能正常接收，会自动序列化成紧凑 JSON 并在页面与邮件里按 KV 展开——不会因为一个字段写法不对就让整批事件被拒。
 
@@ -157,6 +168,7 @@ curl -X POST http://localhost:8086/api/traces/report \
 |------|--------|--------|
 | 单次请求事件数 | 5000 | 硬编码上限 |
 | url 长度 | 2048 字符，超出截断 | 硬编码上限 |
+| service_name 长度 | 128 字符，超出截断 | 硬编码上限 |
 | 请求体大小 | 8 MB | `trace.report_max_body_bytes` |
 | 单条链路事件数 | 5000 | `trace.max_events_per_trace` |
 | 队列容量 | 1000 | `trace.queue_size` |

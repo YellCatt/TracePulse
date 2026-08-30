@@ -40,36 +40,49 @@ func NewTraceController(traceService service.TraceService, maxBodyBytes int64) *
 
 // ---------------------------------------------------------------- JSON API ----
 
-// maxReportURLRunes url 的最大长度，与 model.Trace.URL 的 size 对齐。
-// 再长对排查没有额外价值，只会把每一行数据都撑大。
-const maxReportURLRunes = 2048
+// 上报字段的长度上限，与 model.Trace 里对应列的 size 对齐，写库时才不会溢出。
+const (
+	maxReportURLRunes     = 2048 // URL 常带一串 query 参数，给小了会认不出接口
+	maxReportServiceRunes = 128
+)
 
-// clampURL 去掉首尾空白并截断超长 url。
+// clampField 去掉首尾空白并截断超长字段。
 //
-// 为什么截断而不是返回 400：上报接口的核心承诺是不轻易失败 —— url 过长属于数据瑕疵，
-// 不该连带把整批有价值的事件一起拒掉。保留前 2048 个字符足以定位接口与关键参数。
-func clampURL(raw string) string {
+// 为什么截断而不是返回 400：上报接口的核心承诺是不轻易失败 —— 某个字段过长属于数据
+// 瑕疵，不该连带把整批有价值的事件一起拒掉。按 rune 截断，避免切出半截乱码。
+func clampField(raw string, maxRunes int, field string) string {
 	raw = strings.TrimSpace(raw)
-	if len(raw) <= maxReportURLRunes {
+	if len(raw) <= maxRunes {
 		return raw
 	}
-	// 按 rune 截断，避免把多字节字符切成半截乱码。
-	logger.Warn("report url truncated",
+	logger.Warn("report field truncated",
+		zap.String("field", field),
 		zap.Int("raw_bytes", len(raw)),
-		zap.Int("max_runes", maxReportURLRunes))
-	return string([]rune(raw)[:maxReportURLRunes])
+		zap.Int("max_runes", maxRunes))
+	return string([]rune(raw)[:maxRunes])
+}
+
+func clampURL(raw string) string {
+	return clampField(raw, maxReportURLRunes, "url")
+}
+
+func clampServiceName(raw string) string {
+	return clampField(raw, maxReportServiceRunes, "service_name")
 }
 
 // ReportEvents 上报一批链路事件。
 //
 // 请求体支持两种写法：
 //
-//	{"url":"...","events":[{...},{...}]}   批量（推荐）
-//	[{...},{...}]                          裸数组（单行上报时更省事）
+//	{"service_name":"...","url":"...","events":[{...},{...}]}   批量（推荐）
+//	[{...},{...}]                                               裸数组（单行上报更省事）
 //
-// url 记录到链路上，表示这次链路对应的业务入口（页面 URL 或接口地址）。它有两种传法：
-// 请求体字段（批量写法）与查询参数 ?url=（裸数组没有包裹层，只能走查询参数）。
-// 请求体优先，查询参数兜底；都没传就留空，不影响事件入库。
+// service_name 服务名，url 业务入口地址（接口名），两者都记到链路上。各有两种传法：
+// 请求体字段（批量写法）与查询参数 ?service_name= / ?url=（裸数组没有包裹层，只能走
+// 查询参数）。请求体优先，查询参数兜底。
+//
+// 都不传时：url 留空；service_name 退化用首条事件的 module，老采集端无需改动。
+// 事件自身也可带这两个字段，优先级高于请求级（见 service.ReportMeta）。
 //
 // 队列满时事件会被丢弃，但接口仍然返回 200 —— 采集端不应该因为服务端压力大而失败重试，
 // 否则容易把雪崩放大。
@@ -87,7 +100,9 @@ func (c *TraceController) ReportEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reportURL := clampURL(r.URL.Query().Get("url"))
+	q := r.URL.Query()
+	reportURL := clampURL(q.Get("url"))
+	reportService := clampServiceName(q.Get("service_name"))
 
 	var events []model.TraceEvent
 	var req model.ReportRequest
@@ -95,6 +110,9 @@ func (c *TraceController) ReportEvents(w http.ResponseWriter, r *http.Request) {
 		events = req.Events
 		if u := clampURL(req.URL); u != "" {
 			reportURL = u
+		}
+		if s := clampServiceName(req.ServiceName); s != "" {
+			reportService = s
 		}
 	} else if err := json.Unmarshal(body, &events); err != nil {
 		logger.Warn("report request rejected: invalid json", zap.Error(err))
@@ -116,11 +134,14 @@ func (c *TraceController) ReportEvents(w http.ResponseWriter, r *http.Request) {
 
 	logger.Debug("trace report received",
 		zap.Int("body_bytes", len(body)),
+		zap.String("service", reportService),
 		zap.String("url", reportURL),
 		zap.String("remote_addr", r.RemoteAddr),
 	)
 
-	if err := c.traceService.ReportEvents(events, reportURL); err != nil {
+	meta := service.ReportMeta{URL: reportURL, ServiceName: reportService}
+
+	if err := c.traceService.ReportEvents(events, meta); err != nil {
 		logger.Error("report events to service failed",
 			zap.Int("count", len(events)), zap.Error(err))
 		writeJSON(w, http.StatusServiceUnavailable, errorResp(err.Error()))

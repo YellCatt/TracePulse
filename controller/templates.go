@@ -158,8 +158,11 @@ table.kv td{border:none;padding:2px 0;word-break:break-all}
 .meta{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px 16px;margin-top:10px}
 .meta div{font-size:13px}
 .meta span{display:block;font-size:11px;color:var(--muted)}
-/* 服务字段下方的入口地址。URL 通常一长串，弱化字号并允许任意位置换行，
-   否则会把 meta 网格和表格列撑变形 */
+/* 接口名是一长串 URL，独占一行才不会被挤成竖排 */
+.meta .meta-url{grid-column:1/-1}
+.urlbox{display:inline-block;word-break:break-all;font-size:12px;
+  font-family:ui-monospace,Menlo,Consolas,monospace}
+/* 列表「接口名」列：截断展示，title 悬停看全文 */
 .row-url{margin-top:3px;font-size:11px;color:var(--muted);word-break:break-all}
 .errbox{margin-top:12px;padding:10px 12px;border-radius:8px;background:var(--errbg);
   border:1px solid var(--err);color:var(--err);white-space:pre-wrap;word-break:break-all;font-size:13px}
@@ -252,7 +255,8 @@ table.kv td{border:none;padding:2px 0;word-break:break-all}
   </div>
 
   <div class="meta">
-    <div><span>Service</span>{{if .Summary.Service}}{{.Summary.Service}}{{else}}<em class="muted">-</em>{{end}}{{if .Summary.URL}}<div class="row-url">{{if isAbsURL .Summary.URL}}<a href="{{.Summary.URL}}" target="_blank" rel="noopener noreferrer">{{.Summary.URL}}</a>{{else}}{{.Summary.URL}}{{end}}</div>{{end}}</div>
+    <div><span>Service</span>{{if .Summary.Service}}{{.Summary.Service}}{{else}}<em class="muted">-</em>{{end}}</div>
+    <div class="meta-url"><span>接口名</span>{{if .Summary.URL}}{{if isAbsURL .Summary.URL}}<a class="urlbox" href="{{.Summary.URL}}" target="_blank" rel="noopener noreferrer">{{.Summary.URL}}</a>{{else}}<code class="urlbox">{{.Summary.URL}}</code>{{end}}{{else}}<em class="muted">-</em>{{end}}</div>
     <div><span>Duration</span>{{.Summary.Duration}}</div>
     <div><span>Start</span>{{.Summary.Start}}</div>
     <div><span>End</span>{{.Summary.End}}</div>
@@ -418,7 +422,7 @@ table.kv td{border:none;padding:2px 0;word-break:break-all}
   <table class="list">
     <thead>
       <tr>
-        <th>Trace ID</th><th>状态</th><th>服务</th><th>开始时间</th>
+        <th>Trace ID</th><th>状态</th><th>服务</th><th>接口名</th><th>开始时间</th>
         <th>耗时</th><th>事件数</th><th>错误信息</th><th></th>
       </tr>
     </thead>
@@ -427,7 +431,8 @@ table.kv td{border:none;padding:2px 0;word-break:break-all}
       <tr class="{{if .IsError}}row-err{{end}}">
         <td data-label="Trace ID"><code>{{.Trace.TraceID}}</code></td>
         <td data-label="状态"><span class="status status-{{.Trace.Status}}">{{.Trace.Status}}</span></td>
-        <td data-label="服务">{{if .Trace.ServiceName}}{{.Trace.ServiceName}}{{else}}<span class="muted">-</span>{{end}}{{if .Trace.URL}}<div class="row-url" title="{{.Trace.URL}}">{{.URLShort}}</div>{{end}}</td>
+        <td data-label="服务">{{if .Trace.ServiceName}}{{.Trace.ServiceName}}{{else}}<span class="muted">-</span>{{end}}</td>
+        <td data-label="接口名">{{if .Trace.URL}}<div class="wrap" title="{{.Trace.URL}}">{{.URLShort}}</div>{{else}}<span class="muted">-</span>{{end}}</td>
         <td data-label="开始时间">{{.Start}}</td>
         <td data-label="耗时">{{.Duration}}</td>
         <td data-label="事件数">{{.Trace.EventCount}}</td>
