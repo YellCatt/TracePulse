@@ -279,7 +279,7 @@ table.kv td{border:none;padding:2px 0;word-break:break-all}
         <td data-label="消息"><div class="wrap">{{template "cell" (cell .Message 160)}}</div></td>
         <td data-label="KV 参数">
           {{if .Params}}
-            <details class="fold" {{if le (len .Params) 3}}open{{end}}>
+            <details class="fold">
               <summary>{{len .Params}} 项</summary>
               <div class="fold-body">
                 <table class="kv">
