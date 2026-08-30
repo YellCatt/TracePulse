@@ -113,7 +113,12 @@ jobs:
     - name: Build for ${{ matrix.target.os }}/${{ matrix.target.arch }}
       run: |
         OUTPUT_FILE="tracepulse_${{ matrix.target.suffix }}${{ matrix.target.os == 'windows' && '.exe' || '' }}"
-        ${{ matrix.target.goflags }} go build -tags netgo -ldflags="${{ matrix.target.ldflags }}" -o "$OUTPUT_FILE"
+        # 版本号格式：<短 commit>-<UTC 构建时间>，注入 main.version 供启动时打印。
+        SHORT_SHA=$(git rev-parse --short=7 HEAD)
+        BUILD_TIME=$(date -u +'%Y%m%d-%H%M%S')
+        VERSION="${SHORT_SHA}-${BUILD_TIME}"
+        echo "building version: $VERSION"
+        ${{ matrix.target.goflags }} go build -tags netgo -ldflags="${{ matrix.target.ldflags }} -X main.version=${VERSION}" -o "$OUTPUT_FILE"
         ls -la tracepulse_*
         file "$OUTPUT_FILE" || true
 

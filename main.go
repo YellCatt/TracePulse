@@ -22,6 +22,12 @@ import (
 	"go.uber.org/zap"
 )
 
+// version 程序版本号，由构建脚本通过 -ldflags "-X main.version=<值>" 注入。
+//
+// 默认 dev 表示本地编译 / go run 的产物。排查线上问题时第一件事就是确认
+// "设备上跑的到底是哪一版"，所以启动时必须先把版本号打出来。
+var version = "dev"
+
 func main() {
 	config.LoadConfig()
 
@@ -40,6 +46,9 @@ func main() {
 		log.Fatalf("failed to init logger: %v", err)
 	}
 	defer logger.Sync()
+
+	// 日志组件就绪后立刻打印版本，之后任何一行日志都能对上号。
+	logger.Info("tracepulse starting", zap.String("version", version))
 
 	db := config.NewDatabase()
 	logger.Debug("database connected")
