@@ -93,6 +93,15 @@ func NewAlertService(cfg config.AlertConfig) AlertService {
 		dedup:  make(map[string]time.Time),
 	}
 
+	logger.Debug("alert service initialized",
+		zap.Bool("enabled", cfg.Enabled),
+		zap.Int("queue_size", cfg.QueueSize),
+		zap.Int("dedup_seconds", dedupSeconds(cfg.DedupSeconds)),
+		zap.Int("min_interval_seconds", cfg.MinIntervalSeconds),
+		zap.Int("max_events_in_mail", cfg.MaxEventsInMail),
+		zap.Strings("triggers", cfg.Triggers),
+	)
+
 	s.wg.Add(1)
 	go s.worker()
 
@@ -111,6 +120,13 @@ func (s *alertService) AlertOnTrace(trace *model.Trace, events []model.TraceEven
 	if reason == "" {
 		return
 	}
+
+	logger.Debug("alert trigger matched",
+		zap.String("trace_id", trace.TraceID),
+		zap.String("reason", reason),
+		zap.String("status", trace.Status),
+		zap.Int64("duration_ms", trace.DurationMs),
+	)
 
 	// 同一条链路、同一个原因，在去重窗口内只发一次。
 	if !s.claim(trace.TraceID + "|" + reason) {
@@ -191,6 +207,11 @@ func (s *alertService) AlertOnQueueDrop(droppedCount int) {
 		return
 	}
 
+	logger.Debug("queue drop alert accumulated",
+		zap.Int("dropped", droppedCount),
+		zap.Duration("aggregate_window", queueDropAggWindow),
+	)
+
 	s.mu.Lock()
 	s.dropCount += droppedCount
 	if s.dropTimer == nil {
@@ -210,6 +231,9 @@ func (s *alertService) flushQueueDrop() {
 	if n <= 0 {
 		return
 	}
+	logger.Debug("queue drop alert window flushed",
+		zap.Int("total_dropped", n),
+	)
 	s.enqueue(alertJob{kind: jobKindQueueDrop, dropCount: n})
 }
 
@@ -226,6 +250,16 @@ func (s *alertService) hasTrigger(trigger string) bool {
 func (s *alertService) enqueue(job alertJob) {
 	select {
 	case s.jobs <- job:
+		logger.Debug("alert job enqueued",
+			zap.String("kind", job.kind),
+			zap.String("trace_id", func() string {
+				if job.trace == nil {
+					return ""
+				}
+				return job.trace.TraceID
+			}()),
+			zap.Int("drop_count", job.dropCount),
+		)
 	case <-s.quit:
 	default:
 		logger.Warn("alert queue full, dropping alert",

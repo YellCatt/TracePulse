@@ -4,12 +4,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/example/tracepulse/logger"
 	"github.com/example/tracepulse/model"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/host"
 	"github.com/shirou/gopsutil/v3/mem"
 	"github.com/shirou/gopsutil/v3/net"
+	"go.uber.org/zap"
 )
 
 // StatusService 系统状态业务逻辑接口，提供实时系统监控数据。
@@ -28,6 +30,7 @@ func NewStatusService() StatusService {
 	s := &statusService{
 		status: &model.SystemStatus{},
 	}
+	logger.Debug("system status sampler started, sampling every 1s")
 	go s.sampler()
 	return s
 }
@@ -173,5 +176,9 @@ func (s *statusService) GetStatus() (*model.SystemStatus, error) {
 	if s.status == nil {
 		return &model.SystemStatus{}, nil
 	}
+	logger.Debug("system status snapshot served",
+		zap.Float64("cpu_usage", s.status.Cpu.Usage),
+		zap.Float64("mem_usage", s.status.Memory.Usage),
+	)
 	return s.status, nil
 }

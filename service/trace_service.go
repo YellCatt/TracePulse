@@ -118,6 +118,15 @@ func NewTraceService(repo repository.TraceRepository, alertSvc AlertService, cfg
 		shutdown: make(chan struct{}),
 	}
 
+	logger.Debug("trace service initialized",
+		zap.Int("queue_size", cfg.QueueSize),
+		zap.Int("flush_batch", cfg.FlushBatch),
+		zap.Int("flush_ms", cfg.FlushMs),
+		zap.Int("ttl_seconds", cfg.TTLSeconds),
+		zap.Int("max_events_per_trace", cfg.MaxEventsPerTrace),
+		zap.String("ndjson_path", cfg.NDJSONPath),
+	)
+
 	s.openNDJSON()
 
 	s.wg.Add(3)
@@ -167,9 +176,19 @@ func (s *traceService) ReportEvents(events []model.TraceEvent) error {
 
 	if dropped > 0 {
 		s.droppedTotal.Add(int64(dropped))
-		logger.Warn("trace queue full, dropping events", zap.Int("count", dropped))
+		logger.Warn("trace queue full, dropping events",
+			zap.Int("count", dropped),
+			zap.Int("queue_len", len(s.queue)),
+			zap.Int("queue_cap", cap(s.queue)),
+		)
 		s.alertSvc.AlertOnQueueDrop(dropped)
 	}
+
+	logger.Debug("trace events enqueued",
+		zap.Int("accepted", len(events)-dropped),
+		zap.Int("dropped", dropped),
+		zap.Int("queue_len", len(s.queue)),
+	)
 
 	return nil
 }
@@ -304,10 +323,20 @@ func (s *traceService) addToActive(e model.TraceEvent) {
 			events: make([]model.TraceEvent, 0, 8),
 		}
 		s.active[e.TraceID] = at
+		logger.Debug("active trace created",
+			zap.String("trace_id", e.TraceID),
+			zap.String("module", e.Module),
+			zap.String("event", e.Event),
+			zap.Int("active_total", len(s.active)),
+		)
 	}
 
 	// 单条链路的事件数封顶，防止异常链路无限写撑爆内存和磁盘。
 	if len(at.events) >= s.cfg.MaxEventsPerTrace {
+		logger.Warn("trace event cap reached, ignoring event",
+			zap.String("trace_id", e.TraceID),
+			zap.Int("max_events_per_trace", s.cfg.MaxEventsPerTrace),
+		)
 		return
 	}
 
@@ -353,7 +382,13 @@ func (s *traceService) flushBatch() {
 			delete(s.active, id)
 		}
 	}
+	activeRemaining := len(s.active)
 	s.mu.Unlock()
+
+	logger.Debug("trace batch flush",
+		zap.Int("count", len(toFlush)),
+		zap.Int("active_remaining", activeRemaining),
+	)
 
 	for _, at := range toFlush {
 		s.flushTrace(at)
@@ -368,6 +403,8 @@ func (s *traceService) flushAllActive() {
 	}
 	s.active = make(map[string]*activeTrace)
 	s.mu.Unlock()
+
+	logger.Debug("flushing all active traces on shutdown", zap.Int("count", len(all)))
 
 	for _, at := range all {
 		s.flushTrace(at)
@@ -444,6 +481,13 @@ func (s *traceService) flushTrace(at *activeTrace) {
 
 	s.flushedTotal.Add(int64(len(at.events)))
 
+	logger.Debug("trace flushed to db",
+		zap.String("trace_id", trace.TraceID),
+		zap.Int("events", len(at.events)),
+		zap.Bool("partial", partial),
+		zap.String("status", trace.Status),
+	)
+
 	// 告警要带完整链路内容；分批落盘时内存里只有这一段，回库补齐。
 	s.maybeAlert(trace, at.events, partial)
 }
@@ -504,7 +548,13 @@ func (s *traceService) checkTTL() {
 			delete(s.active, id)
 		}
 	}
+	activeTotal := len(s.active)
 	s.mu.Unlock()
+
+	logger.Debug("trace TTL scan",
+		zap.Int("active_total", activeTotal),
+		zap.Int("expired", len(expired)),
+	)
 
 	for _, at := range expired {
 		logger.Warn("trace TTL expired, forcing flush",
@@ -540,6 +590,10 @@ func (s *traceService) cleanupLoop() {
 // runCleanup 删除过期数据并回收磁盘空间。
 func (s *traceService) runCleanup() {
 	cutoff := time.Now().AddDate(0, 0, -s.cfg.CleanupDays)
+	logger.Debug("trace cleanup started",
+		zap.String("cutoff", cutoff.Format(time.RFC3339)),
+		zap.Int("retention_days", s.cfg.CleanupDays),
+	)
 
 	eventDeleted, err := s.repo.DeleteEventsBefore(cutoff)
 	if err != nil {
@@ -597,6 +651,9 @@ func (s *traceService) openNDJSON() {
 
 	s.ndjsonFile = f
 	s.ndjsonPath = s.cfg.NDJSONPath
+	logger.Debug("ndjson fallback file opened",
+		zap.String("path", s.cfg.NDJSONPath),
+	)
 }
 
 // writeNDJSON 追加一行事件 JSON。文件写失败时降级到 stdout，绝不回传错误影响上报。
@@ -623,6 +680,10 @@ func (s *traceService) writeNDJSON(e model.TraceEvent) {
 	// 超过体积阈值就轮转，避免兜底日志本身把 U 盘写满。
 	if info, err := s.ndjsonFile.Stat(); err == nil {
 		if info.Size() > int64(s.cfg.NDJSONMaxMB)<<20 {
+			logger.Debug("ndjson fallback file exceeds size limit, rotating",
+				zap.Int64("size_bytes", info.Size()),
+				zap.Int("max_mb", s.cfg.NDJSONMaxMB),
+			)
 			s.rotateNDJSONLocked()
 		}
 	}

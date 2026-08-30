@@ -13,9 +13,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/example/tracepulse/logger"
 	"github.com/example/tracepulse/model"
 	"github.com/example/tracepulse/service"
 	"github.com/example/tracepulse/view"
+	"go.uber.org/zap"
 )
 
 // TraceController 链路相关的 HTTP handler，同时提供 JSON API 与内置 HTML 页面。
@@ -50,37 +52,54 @@ func NewTraceController(traceService service.TraceService, maxBodyBytes int64) *
 func (c *TraceController) ReportEvents(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, c.maxBodyBytes))
 	if err != nil {
+		logger.Warn("report request rejected: body too large",
+			zap.Int64("max_bytes", c.maxBodyBytes), zap.Error(err))
 		writeJSON(w, http.StatusRequestEntityTooLarge, errorResp("request body too large"))
 		return
 	}
 	if len(body) == 0 {
+		logger.Warn("report request rejected: empty body")
 		writeJSON(w, http.StatusBadRequest, errorResp("empty request body"))
 		return
 	}
+
+	logger.Debug("trace report received",
+		zap.Int("body_bytes", len(body)),
+		zap.String("remote_addr", r.RemoteAddr),
+	)
 
 	var events []model.TraceEvent
 	var req model.ReportRequest
 	if err := json.Unmarshal(body, &req); err == nil && len(req.Events) > 0 {
 		events = req.Events
 	} else if err := json.Unmarshal(body, &events); err != nil {
+		logger.Warn("report request rejected: invalid json", zap.Error(err))
 		writeJSON(w, http.StatusBadRequest, errorResp("invalid json body, expect {\"events\":[...]} or [...]"))
 		return
 	}
 
 	if len(events) == 0 {
+		logger.Warn("report request rejected: no events")
 		writeJSON(w, http.StatusBadRequest, errorResp("events is empty"))
 		return
 	}
 	if len(events) > 5000 {
+		logger.Warn("report request rejected: too many events",
+			zap.Int("count", len(events)))
 		writeJSON(w, http.StatusRequestEntityTooLarge, errorResp("too many events in one request, max 5000"))
 		return
 	}
 
 	if err := c.traceService.ReportEvents(events); err != nil {
+		logger.Error("report events to service failed",
+			zap.Int("count", len(events)), zap.Error(err))
 		writeJSON(w, http.StatusServiceUnavailable, errorResp(err.Error()))
 		return
 	}
 
+	logger.Debug("trace events accepted",
+		zap.Int("count", len(events)),
+	)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status": "ok",
 		"count":  len(events),
@@ -97,14 +116,22 @@ func (c *TraceController) GetTraceJSON(w http.ResponseWriter, r *http.Request) {
 
 	trace, events, err := c.traceService.GetTrace(traceID)
 	if err != nil {
+		logger.Error("get trace json failed",
+			zap.String("trace_id", traceID), zap.Error(err))
 		writeJSON(w, http.StatusInternalServerError, errorResp(err.Error()))
 		return
 	}
 	if trace == nil {
+		logger.Debug("trace not found",
+			zap.String("trace_id", traceID))
 		writeJSON(w, http.StatusNotFound, errorResp("trace not found"))
 		return
 	}
 
+	logger.Debug("trace json returned",
+		zap.String("trace_id", traceID),
+		zap.Int("events", len(events)),
+	)
 	writeJSON(w, http.StatusOK, &model.TraceDetail{Trace: *trace, Events: events})
 }
 
@@ -118,16 +145,30 @@ func (c *TraceController) ListTracesJSON(w http.ResponseWriter, r *http.Request)
 
 	result, err := c.traceService.ListTraces(filter)
 	if err != nil {
+		logger.Error("list traces json failed", zap.Error(err))
 		writeJSON(w, http.StatusInternalServerError, errorResp(err.Error()))
 		return
 	}
 
+	logger.Debug("traces listed",
+		zap.Int64("total", result.Total),
+		zap.Int("page", result.Page),
+		zap.Int("page_size", result.PageSize),
+	)
 	writeJSON(w, http.StatusOK, result)
 }
 
 // StatsJSON 返回队列水位等运行时指标，便于判断是否需要扩容或调大队列。
 func (c *TraceController) StatsJSON(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, c.traceService.Stats())
+	stats := c.traceService.Stats()
+	logger.Debug("trace stats queried",
+		zap.Int("queue_len", stats.QueueLen),
+		zap.Int("queue_cap", stats.QueueCap),
+		zap.Int("active_traces", stats.ActiveTraces),
+		zap.Int64("dropped_total", stats.DroppedTotal),
+		zap.Int64("flushed_total", stats.FlushedTotal),
+	)
+	writeJSON(w, http.StatusOK, stats)
 }
 
 // -------------------------------------------------------------- HTML 页面 ----
@@ -135,6 +176,11 @@ func (c *TraceController) StatsJSON(w http.ResponseWriter, r *http.Request) {
 // TraceDetailPage 链路详情页，时序展示整条链路的每一步。
 func (c *TraceController) TraceDetailPage(w http.ResponseWriter, r *http.Request) {
 	traceID := strings.TrimSpace(r.PathValue("trace_id"))
+
+	logger.Debug("trace detail page requested",
+		zap.String("trace_id", traceID),
+		zap.String("remote_addr", r.RemoteAddr),
+	)
 
 	data := &detailPageData{Title: "链路详情 · TracePulse", TraceID: traceID}
 
@@ -166,6 +212,8 @@ func (c *TraceController) SearchPage(w http.ResponseWriter, r *http.Request) {
 
 	// 直接输入 trace_id 精确查询时，一步到位跳到详情页，这是告警排查最高频的路径。
 	if gotoTID := strings.TrimSpace(q.Get("goto_trace_id")); gotoTID != "" {
+		logger.Debug("search page goto trace detail",
+			zap.String("trace_id", gotoTID))
 		http.Redirect(w, r, "/trace/"+url.PathEscape(gotoTID), http.StatusFound)
 		return
 	}
@@ -187,9 +235,14 @@ func (c *TraceController) SearchPage(w http.ResponseWriter, r *http.Request) {
 	if q.Has("page") || filterHasCondition(filter) {
 		result, err := c.traceService.ListTraces(filter)
 		if err != nil {
+			logger.Error("search page list traces failed", zap.Error(err))
 			c.renderList(w, http.StatusInternalServerError, data.withError(err.Error()))
 			return
 		}
+		logger.Debug("search page traces listed",
+			zap.Int64("total", result.Total),
+			zap.Int("page", result.Page),
+		)
 		data.Result = result
 		data.build(result)
 	}

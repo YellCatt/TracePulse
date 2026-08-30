@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/example/tracepulse/logger"
 	"github.com/example/tracepulse/model"
 	"github.com/example/tracepulse/repository"
+	"go.uber.org/zap"
 )
 
 // demoEvent 演示链路中的一个事件。offsetMs 是相对链路起点的毫秒偏移。
@@ -138,6 +140,8 @@ func SeedDemoData(repo repository.TraceRepository, force bool) (int, error) {
 		if _, total, err := repo.ListTraces(model.TraceFilter{PageSize: 1}); err != nil {
 			return 0, fmt.Errorf("count traces before seeding: %w", err)
 		} else if total > 0 {
+			logger.Debug("demo data seeding skipped: traces already exist",
+				zap.Int64("existing", total))
 			return 0, nil
 		}
 	}
@@ -174,6 +178,12 @@ func SeedDemoData(repo repository.TraceRepository, force bool) (int, error) {
 			lastErr = fmt.Errorf("create demo trace %s: %w", traceID, err)
 			continue
 		}
+		logger.Debug("demo trace created",
+			zap.String("trace_id", traceID),
+			zap.String("service", d.service),
+			zap.String("status", d.status),
+			zap.Int("events", len(d.events)),
+		)
 
 		events := make([]model.TraceEvent, 0, len(d.events))
 		for _, de := range d.events {
@@ -200,6 +210,12 @@ func SeedDemoData(repo repository.TraceRepository, force bool) (int, error) {
 
 		inserted++
 	}
+
+	logger.Debug("demo data seeding finished",
+		zap.Int("inserted", inserted),
+		zap.Bool("forced", force),
+		zap.Error(lastErr),
+	)
 
 	return inserted, lastErr
 }

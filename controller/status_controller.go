@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/example/tracepulse/logger"
 	"github.com/example/tracepulse/service"
+	"go.uber.org/zap"
 )
 
 // StatusController 系统状态相关的 HTTP 请求处理器。
@@ -21,9 +23,14 @@ func NewStatusController(service service.StatusService) *StatusController {
 func (c *StatusController) GetStatus(w http.ResponseWriter, r *http.Request) {
 	status, err := c.service.GetStatus()
 	if err != nil {
+		logger.Error("get status failed", zap.Error(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	logger.Debug("system status queried",
+		zap.String("remote_addr", r.RemoteAddr),
+	)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

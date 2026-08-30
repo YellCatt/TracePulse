@@ -2,7 +2,9 @@
 package repository
 
 import (
+	"github.com/example/tracepulse/logger"
 	"github.com/example/tracepulse/model"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -27,7 +29,14 @@ func NewUserRepository(db *gorm.DB) UserRepository {
 
 // Create 创建新用户记录。
 func (r *userRepository) Create(user *model.User) error {
-	return r.db.Create(user).Error
+	err := r.db.Create(user).Error
+	if err != nil {
+		logger.Error("create user failed",
+			zap.String("name", user.Name), zap.Error(err))
+		return err
+	}
+	logger.Debug("user persisted", zap.Uint("id", user.ID), zap.String("name", user.Name))
+	return nil
 }
 
 // GetByID 根据 ID 查询用户，返回 nil,nil 表示未找到记录。
@@ -35,24 +44,48 @@ func (r *userRepository) GetByID(id uint) (*model.User, error) {
 	var user model.User
 	err := r.db.First(&user, id).Error
 	if err == gorm.ErrRecordNotFound {
+		logger.Debug("user not found in db", zap.Uint("id", id))
 		return nil, nil
 	}
-	return &user, err
+	if err != nil {
+		logger.Error("get user failed", zap.Uint("id", id), zap.Error(err))
+		return nil, err
+	}
+	logger.Debug("user fetched from db", zap.Uint("id", id), zap.String("name", user.Name))
+	return &user, nil
 }
 
 // GetAll 查询所有用户记录。
 func (r *userRepository) GetAll() ([]model.User, error) {
 	var users []model.User
 	err := r.db.Find(&users).Error
-	return users, err
+	if err != nil {
+		logger.Error("get all users failed", zap.Error(err))
+		return nil, err
+	}
+	logger.Debug("all users fetched from db", zap.Int("count", len(users)))
+	return users, nil
 }
 
 // Update 更新指定用户的所有字段。
 func (r *userRepository) Update(user *model.User) error {
-	return r.db.Save(user).Error
+	err := r.db.Save(user).Error
+	if err != nil {
+		logger.Error("update user failed",
+			zap.Uint("id", user.ID), zap.Error(err))
+		return err
+	}
+	logger.Debug("user updated in db", zap.Uint("id", user.ID))
+	return nil
 }
 
 // Delete 根据 ID 删除用户记录。
 func (r *userRepository) Delete(id uint) error {
-	return r.db.Delete(&model.User{}, id).Error
+	err := r.db.Delete(&model.User{}, id).Error
+	if err != nil {
+		logger.Error("delete user failed", zap.Uint("id", id), zap.Error(err))
+		return err
+	}
+	logger.Debug("user deleted from db", zap.Uint("id", id))
+	return nil
 }

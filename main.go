@@ -35,10 +35,12 @@ func main() {
 	defer logger.Sync()
 
 	db := config.NewDatabase()
+	logger.Debug("database connected")
 
 	userRepo := repository.NewUserRepository(db)
 	userService := service.NewUserService(userRepo)
 	userController := controller.NewUserController(userService)
+	logger.Debug("user components initialized")
 
 	statusService := service.NewStatusService()
 	statusController := controller.NewStatusController(statusService)
@@ -48,10 +50,17 @@ func main() {
 	traceRepo := repository.NewTraceRepository(db)
 	traceSvc := service.NewTraceService(traceRepo, alertSvc, traceCfg)
 	traceController := controller.NewTraceController(traceSvc, int64(traceCfg.ReportMaxBodyBytes))
+	logger.Debug("trace components initialized",
+		zap.Int("report_max_body_bytes", traceCfg.ReportMaxBodyBytes),
+	)
 
 	// 首次启动（库里还没有任何链路）时灌入演示数据，打开页面就能看到效果。
 	// 正式部署在 config/config.yaml 里把 demo.disable 设为 true 即可关闭。
 	demoCfg := config.GetDemoConfig()
+	logger.Debug("demo data config",
+		zap.Bool("disable", demoCfg.Disable),
+		zap.Bool("force", demoCfg.Force),
+	)
 	if !demoCfg.Disable {
 		seeded, err := service.SeedDemoData(traceRepo, demoCfg.Force)
 		if err != nil {
@@ -75,6 +84,12 @@ func main() {
 	}
 
 	// 优雅关闭：先停 HTTP 接收新请求，再把内存里的链路全部落盘，最后停告警协程。
+	logger.Debug("http server config",
+		zap.Int("port", serverCfg.Port),
+		zap.Int("read_timeout_seconds", serverCfg.ReadTimeoutSeconds),
+		zap.Int("write_timeout_seconds", serverCfg.WriteTimeoutSeconds),
+		zap.Int("shutdown_timeout_seconds", serverCfg.ShutdownTimeoutSeconds),
+	)
 	serverErr := make(chan error, 1)
 	go func() {
 		logger.Info("server starting", zap.Int("port", serverCfg.Port))

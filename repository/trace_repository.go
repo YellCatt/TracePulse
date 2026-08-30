@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/example/tracepulse/config"
+	"github.com/example/tracepulse/logger"
 	"github.com/example/tracepulse/model"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -39,20 +41,45 @@ func NewTraceRepository(db *gorm.DB) TraceRepository {
 // ---------------------------------------------------------------- traces ----
 
 func (r *traceRepository) CreateTrace(trace *model.Trace) error {
-	return r.db.Create(trace).Error
+	err := r.db.Create(trace).Error
+	if err != nil {
+		logger.Error("create trace failed",
+			zap.String("trace_id", trace.TraceID), zap.Error(err))
+		return err
+	}
+	logger.Debug("trace persisted",
+		zap.String("trace_id", trace.TraceID),
+		zap.String("service", trace.ServiceName),
+		zap.String("status", trace.Status),
+	)
+	return nil
 }
 
 func (r *traceRepository) UpdateTrace(trace *model.Trace) error {
-	return r.db.Save(trace).Error
+	err := r.db.Save(trace).Error
+	if err != nil {
+		logger.Error("update trace failed",
+			zap.String("trace_id", trace.TraceID), zap.Error(err))
+		return err
+	}
+	logger.Debug("trace updated",
+		zap.String("trace_id", trace.TraceID),
+		zap.Int("event_count", trace.EventCount),
+		zap.String("status", trace.Status),
+	)
+	return nil
 }
 
 func (r *traceRepository) GetTraceByID(traceID string) (*model.Trace, error) {
 	var trace model.Trace
 	err := r.db.Where("trace_id = ?", traceID).First(&trace).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
+		logger.Debug("trace not found in db", zap.String("trace_id", traceID))
 		return nil, nil
 	}
 	if err != nil {
+		logger.Error("get trace by id failed",
+			zap.String("trace_id", traceID), zap.Error(err))
 		return nil, err
 	}
 	return &trace, nil
@@ -60,7 +87,16 @@ func (r *traceRepository) GetTraceByID(traceID string) (*model.Trace, error) {
 
 func (r *traceRepository) DeleteTracesBefore(cutoff time.Time) (int64, error) {
 	result := r.db.Where("start_time < ?", cutoff).Delete(&model.Trace{})
-	return result.RowsAffected, result.Error
+	if result.Error != nil {
+		logger.Error("delete traces before failed",
+			zap.Time("cutoff", cutoff), zap.Error(result.Error))
+		return 0, result.Error
+	}
+	logger.Debug("traces deleted by cleanup",
+		zap.Int64("rows", result.RowsAffected),
+		zap.Time("cutoff", cutoff),
+	)
+	return result.RowsAffected, nil
 }
 
 // ListTraces 多条件过滤 + 分页。
@@ -152,8 +188,9 @@ func (r *traceRepository) CreateEvents(events []model.TraceEvent) error {
 		return nil
 	}
 
+	start := time.Now()
 	const chunk = 500
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	err := r.db.Transaction(func(tx *gorm.DB) error {
 		for start := 0; start < len(events); start += chunk {
 			end := start + chunk
 			if end > len(events) {
@@ -166,6 +203,16 @@ func (r *traceRepository) CreateEvents(events []model.TraceEvent) error {
 		}
 		return nil
 	})
+	if err != nil {
+		logger.Error("create events failed",
+			zap.Int("count", len(events)), zap.Error(err))
+		return err
+	}
+	logger.Debug("trace events persisted",
+		zap.Int("count", len(events)),
+		zap.Duration("elapsed", time.Since(start)),
+	)
+	return nil
 }
 
 func (r *traceRepository) GetEventsByTraceID(traceID string) ([]model.TraceEvent, error) {
@@ -173,13 +220,31 @@ func (r *traceRepository) GetEventsByTraceID(traceID string) ([]model.TraceEvent
 	err := r.db.Where("trace_id = ?", traceID).
 		Order("timestamp ASC, id ASC").
 		Find(&events).Error
-	return events, err
+	if err != nil {
+		logger.Error("get events by trace failed",
+			zap.String("trace_id", traceID), zap.Error(err))
+		return nil, err
+	}
+	logger.Debug("trace events fetched",
+		zap.String("trace_id", traceID),
+		zap.Int("count", len(events)),
+	)
+	return events, nil
 }
 
 // DeleteEventsBefore 按写入时间清理事件（服务端保留策略，与客户端时钟是否准确无关）。
 func (r *traceRepository) DeleteEventsBefore(cutoff time.Time) (int64, error) {
 	result := r.db.Where("created_at < ?", cutoff).Delete(&model.TraceEvent{})
-	return result.RowsAffected, result.Error
+	if result.Error != nil {
+		logger.Error("delete events before failed",
+			zap.Time("cutoff", cutoff), zap.Error(result.Error))
+		return 0, result.Error
+	}
+	logger.Debug("events deleted by cleanup",
+		zap.Int64("rows", result.RowsAffected),
+		zap.Time("cutoff", cutoff),
+	)
+	return result.RowsAffected, nil
 }
 
 // DeleteOrphanEvents 清理父链路已不存在的孤儿事件。
@@ -197,11 +262,29 @@ func (r *traceRepository) DeleteOrphanEvents(gracePeriod time.Duration) (int64, 
 	result := r.db.Where("created_at < ?", time.Now().Add(-gracePeriod)).
 		Where("trace_id NOT IN (?)", r.db.Model(&model.Trace{}).Select("trace_id")).
 		Delete(&model.TraceEvent{})
-	return result.RowsAffected, result.Error
+	if result.Error != nil {
+		logger.Error("delete orphan events failed",
+			zap.Duration("grace_period", gracePeriod), zap.Error(result.Error))
+		return 0, result.Error
+	}
+	logger.Debug("orphan events deleted",
+		zap.Int64("rows", result.RowsAffected),
+		zap.Duration("grace_period", gracePeriod),
+	)
+	return result.RowsAffected, nil
 }
 
 // ----------------------------------------------------------------- misc ----
 
 func (r *traceRepository) Vacuum(deletedRows int64) error {
-	return config.VacuumDatabase(r.db, deletedRows)
+	err := config.VacuumDatabase(r.db, deletedRows)
+	if err != nil {
+		logger.Error("database vacuum failed",
+			zap.Int64("deleted_rows", deletedRows), zap.Error(err))
+		return err
+	}
+	logger.Debug("database vacuum completed",
+		zap.Int64("deleted_rows", deletedRows),
+	)
+	return nil
 }

@@ -3,9 +3,12 @@ package router
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/example/tracepulse/controller"
+	"github.com/example/tracepulse/logger"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
+	"go.uber.org/zap"
 )
 
 // NewRouter 创建并配置 HTTP 请求路由器。
@@ -16,7 +19,7 @@ func NewRouter(
 	userController *controller.UserController,
 	statusController *controller.StatusController,
 	traceController *controller.TraceController,
-) *http.ServeMux {
+) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -59,7 +62,42 @@ func NewRouter(
 		_, _ = w.Write([]byte(swaggerDoc))
 	})
 
-	return mux
+	logger.Debug("http routes registered")
+	return withRequestLog(mux)
+}
+
+// withRequestLog 包装 mux，记录每个 HTTP 请求的方法、路径与耗时（Debug 级别）。
+func withRequestLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		logger.Debug("http request handled",
+			zap.String("method", r.Method),
+			zap.String("path", r.URL.Path),
+			zap.Int("status", rec.status),
+			zap.String("remote_addr", r.RemoteAddr),
+			zap.Duration("elapsed", time.Since(start)),
+		)
+	})
+}
+
+// statusRecorder 记录响应状态码，供请求日志输出。
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	if s.status == 0 {
+		s.status = http.StatusOK
+	}
+	return s.ResponseWriter.Write(b)
 }
 
 // swaggerDoc 内嵌的 Swagger 2.0 文档定义，用于 Swagger UI 展示 API 文档。

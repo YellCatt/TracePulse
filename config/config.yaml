@@ -10,7 +10,7 @@ database:
     sync_mode: NORMAL
 log:
     path: ./logs
-    level: info
+    level: debug
 trace:
     queue_size: 1000
     ttl_seconds: 300
