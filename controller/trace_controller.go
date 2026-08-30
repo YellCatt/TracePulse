@@ -231,21 +231,19 @@ func (c *TraceController) SearchPage(w http.ResponseWriter, r *http.Request) {
 	data.Form.StartRaw = strings.TrimSpace(q.Get("start_time"))
 	data.Form.EndRaw = strings.TrimSpace(q.Get("end_time"))
 
-	// 只有用户真正提交了任一条件，或显式翻页时才查库，避免打开首页就全表聚合。
-	if q.Has("page") || filterHasCondition(filter) {
-		result, err := c.traceService.ListTraces(filter)
-		if err != nil {
-			logger.Error("search page list traces failed", zap.Error(err))
-			c.renderList(w, http.StatusInternalServerError, data.withError(err.Error()))
-			return
-		}
-		logger.Debug("search page traces listed",
-			zap.Int64("total", result.Total),
-			zap.Int("page", result.Page),
-		)
-		data.Result = result
-		data.build(result)
+	// 打开页面 / 空条件点查询时也列出全部数据，默认按开始时间倒序取第一页。
+	result, err := c.traceService.ListTraces(filter)
+	if err != nil {
+		logger.Error("search page list traces failed", zap.Error(err))
+		c.renderList(w, http.StatusInternalServerError, data.withError(err.Error()))
+		return
 	}
+	logger.Debug("search page traces listed",
+		zap.Int64("total", result.Total),
+		zap.Int("page", result.Page),
+	)
+	data.Result = result
+	data.build(result)
 
 	data.Queried = data.Result != nil
 	c.renderList(w, http.StatusOK, data)
@@ -679,13 +677,6 @@ func filterToForm(f model.TraceFilter) filterForm {
 		form.End = f.EndTime.In(view.Loc).Format("2006-01-02 15:04:05")
 	}
 	return form
-}
-
-// filterHasCondition 判断用户是否输入了任一过滤条件。
-func filterHasCondition(f model.TraceFilter) bool {
-	return f.TraceID != "" || f.Service != "" || f.Status != "" || f.Level != "" ||
-		f.Module != "" || f.Keyword != "" || f.HasError != nil || f.MinDurationMs > 0 ||
-		!f.StartTime.IsZero() || !f.EndTime.IsZero()
 }
 
 // parseTimeFlexible 解析时间，支持绝对时间与相对时间两种写法。

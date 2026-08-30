@@ -263,6 +263,33 @@ func TestSearchPageAcceptsRelativeTime(t *testing.T) {
 	}
 }
 
+// TestSearchPageListsAllOnEmptyParams 打开页面 / 空条件点查询也必须列出全部数据，
+// 不能只显示"未查询"的空状态（否则用户会误以为没有数据）。
+func TestSearchPageListsAllOnEmptyParams(t *testing.T) {
+	c, done := newTestController(t)
+	defer done()
+
+	reportReq := httptest.NewRequest(http.MethodPost, "/api/traces/report",
+		strings.NewReader(`{"events":[{"trace_id":"t-empty-params","level":"info","module":"m","event":"start"}]}`))
+	reportRec := httptest.NewRecorder()
+	c.ReportEvents(reportRec, reportReq)
+	if reportRec.Code != http.StatusOK {
+		t.Fatalf("report: status = %d, want 200 (%s)", reportRec.Code, reportRec.Body.String())
+	}
+	waitForTrace(t, c, "t-empty-params")
+
+	pageReq := httptest.NewRequest(http.MethodGet, "/traces", nil)
+	pageRec := httptest.NewRecorder()
+	c.SearchPage(pageRec, pageReq)
+
+	if pageRec.Code != http.StatusOK {
+		t.Fatalf("empty params: status = %d, want 200 (%s)", pageRec.Code, pageRec.Body.String())
+	}
+	if !strings.Contains(pageRec.Body.String(), "t-empty-params") {
+		t.Errorf("empty params page should list persisted traces, got: %s", pageRec.Body.String())
+	}
+}
+
 // TestParseTimeFlexible 时间解析的各种写法。
 func TestParseTimeFlexible(t *testing.T) {
 	cases := []struct {
