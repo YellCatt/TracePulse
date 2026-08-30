@@ -1,8 +1,10 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -140,6 +142,43 @@ func TestDedupSecondsExplicitZeroHonored(t *testing.T) {
 
 	if cfg.Alert.DedupSeconds == nil || *cfg.Alert.DedupSeconds != 0 {
 		t.Errorf("explicit dedup_seconds:0 must be honored, got %v", cfg.Alert.DedupSeconds)
+	}
+}
+
+// TestRepoConfigIsComplete 仓库里的 config.yaml 必须字段齐全。
+// 缺任何一个字段，启动时都会触发回写补默认值，而回写会抹掉文件里手写的注释。
+// 这个用例就是要守住那批注释：新增配置字段时必须同步改 config.yaml。
+func TestRepoConfigIsComplete(t *testing.T) {
+	raw, err := os.ReadFile("config.yaml") // 与 config_test.go 同目录
+	if err != nil {
+		t.Fatalf("read repo config: %v", err)
+	}
+	if !strings.Contains(string(raw), "#") {
+		t.Fatal("config.yaml is expected to carry comments; did someone strip them?")
+	}
+
+	var local Config
+	if err := yaml.Unmarshal(raw, &local); err != nil {
+		t.Fatalf("parse repo config: %v", err)
+	}
+
+	before, err := yaml.Marshal(&local)
+	if err != nil {
+		t.Fatalf("marshal loaded config: %v", err)
+	}
+
+	cfg = local
+	t.Cleanup(func() { cfg = Config{} })
+	applyDefaults()
+
+	after, err := yaml.Marshal(&cfg)
+	if err != nil {
+		t.Fatalf("marshal merged config: %v", err)
+	}
+
+	if !bytes.Equal(before, after) {
+		t.Errorf("config.yaml is missing fields, so startup would rewrite it and drop all comments.\n"+
+			"add the missing fields to config.yaml.\n--- as written ---\n%s\n--- after defaults ---\n%s", before, after)
 	}
 }
 

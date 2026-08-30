@@ -6,10 +6,12 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -53,6 +55,16 @@ type DatabaseConfig struct {
 type LogConfig struct {
 	Path  string `yaml:"path"`
 	Level string `yaml:"level"`
+	// Mode 输出模式：
+	//   split（默认）按级别分文件，每个文件只含该级别，fatal 归入 error.log；
+	//   range  按级别分文件，每个文件含该级别及以上；
+	//   single 全部日志写入同一个 app.log，只按级别过滤。
+	Mode string `yaml:"mode"`
+	// Levels 级别白名单，非空时只输出列出的级别（例如 [warn, error]），此时 level 只作兜底。
+	// 用切片而非字符串，是为了让"字段缺失"与"显式只要这几个级别"区分开。
+	Levels []string `yaml:"levels"`
+	// DisableConsole 关闭控制台输出。反向语义，保证老配置缺少该字段时仍往控制台打日志。
+	DisableConsole bool `yaml:"disable_console"`
 }
 
 // TraceConfig 链路采集与存储配置。
@@ -135,6 +147,9 @@ type DemoConfig struct {
 
 var cfg Config
 
+// defaultLogMode 日志默认输出模式：按级别分文件，每个文件只含该级别。
+const defaultLogMode = "split"
+
 // LoadConfig 读取配置；文件不存在则生成默认配置。
 func LoadConfig() {
 	configPath := "config/config.yaml"
@@ -145,18 +160,37 @@ func LoadConfig() {
 		if err := SaveConfig(configPath); err != nil {
 			log.Fatalf("failed to create default config: %v", err)
 		}
-	} else {
-		file, err := os.ReadFile(configPath)
-		if err != nil {
-			log.Fatalf("failed to read config file: %v", err)
-		}
-		if err := yaml.Unmarshal(file, &cfg); err != nil {
-			log.Fatalf("failed to parse config file: %v", err)
-		}
+		return
 	}
 
-	// 补齐缺失字段，并把最终生效的配置回写，保证配置与行为一致。
+	file, err := os.ReadFile(configPath)
+	if err != nil {
+		log.Fatalf("failed to read config file: %v", err)
+	}
+	if err := yaml.Unmarshal(file, &cfg); err != nil {
+		log.Fatalf("failed to parse config file: %v", err)
+	}
+
+	// 记录「用户实际写了什么」，用于判断这次启动有没有真的需要补齐字段。
+	loaded, err := yaml.Marshal(&cfg)
+	if err != nil {
+		log.Fatalf("failed to normalize config file: %v", err)
+	}
+
 	applyDefaults()
+
+	// 仅在补齐了缺失字段时才回写：
+	// 1) 保住用户手写的注释与排版（yaml.Marshal 会把注释全部抹掉）；
+	// 2) 避免每次启动都做一次无意义的磁盘写入。
+	merged, err := yaml.Marshal(&cfg)
+	if err != nil {
+		log.Fatalf("failed to serialize merged config: %v", err)
+	}
+	if bytes.Equal(loaded, merged) {
+		return
+	}
+
+	log.Println("config file is missing fields, backfilling defaults...")
 	if err := SaveConfig(configPath); err != nil {
 		log.Printf("warning: failed to persist merged config: %v", err)
 	}
@@ -180,6 +214,7 @@ func defaultConfig() Config {
 		Log: LogConfig{
 			Path:  "./logs",
 			Level: "info",
+			Mode:  defaultLogMode,
 		},
 		Trace: TraceConfig{
 			QueueSize:              1000,
@@ -254,6 +289,11 @@ func applyDefaults() {
 	if cfg.Log.Level == "" {
 		cfg.Log.Level = d.Log.Level
 	}
+	if cfg.Log.Mode == "" {
+		cfg.Log.Mode = d.Log.Mode
+	}
+	// 白名单为空切片时统一写成 null，回写的配置里不出现"看着像配了其实没配"的空数组。
+	cfg.Log.Levels = normalizeLogLevels(cfg.Log.Levels)
 
 	if cfg.Trace.QueueSize <= 0 {
 		cfg.Trace.QueueSize = d.Trace.QueueSize
@@ -347,6 +387,27 @@ func GetLogLevel() string     { return cfg.Log.Level }
 // intPtr 返回一个指向常量的指针，用于需要区分「未配置」与「显式零值」的配置项。
 func intPtr(v int) *int {
 	return &v
+}
+
+// normalizeLogLevels 清洗日志级别白名单：去空白、统一小写、去重，全空则返回 nil。
+func normalizeLogLevels(in []string) []string {
+	out := make([]string, 0, len(in))
+	seen := make(map[string]struct{}, len(in))
+	for _, raw := range in {
+		v := strings.ToLower(strings.TrimSpace(raw))
+		if v == "" {
+			continue
+		}
+		if _, dup := seen[v]; dup {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // InitDirectories 创建日志目录与数据库所在目录。

@@ -29,7 +29,14 @@ func main() {
 		log.Fatalf("failed to init directories: %v", err)
 	}
 
-	if err := logger.Init(config.GetLogPath(), config.GetLogLevel()); err != nil {
+	logCfg := config.GetLogConfig()
+	if err := logger.Init(logger.Options{
+		Dir:            logCfg.Path,
+		Level:          logCfg.Level,
+		Mode:           logCfg.Mode,
+		Levels:         logCfg.Levels,
+		DisableConsole: logCfg.DisableConsole,
+	}); err != nil {
 		log.Fatalf("failed to init logger: %v", err)
 	}
 	defer logger.Sync()

@@ -12,7 +12,7 @@
 - **零依赖前端**：检索页与详情页服务端渲染，手机浏览器无需 JS 也能排查
 - **告警不炸群**：同链路同原因去重 + 全局最小间隔限流 + 队列丢弃聚合汇总
 - **跨平台**：默认 `modernc.org/sqlite`（纯 Go 无 CGO）出静态单文件；MIPS 路由器自动切到 CGO 版 `mattn/go-sqlite3`，极路由可直接跑
-- **开箱即用**：配置文件缺失自动生成，字段缺失自动补全并回写
+- **开箱即用**：配置文件缺失自动生成，字段缺失才自动补全并回写（字段齐全时不动你的文件，注释得以保留）
 
 ## 快速开始
 
@@ -292,6 +292,9 @@ database:
 log:
   path: ./logs
   level: info
+  mode: split
+  levels: []
+  disable_console: false
 trace:
   queue_size: 1000
   ttl_seconds: 300
@@ -353,7 +356,20 @@ alert:
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
 | `path` | 日志目录 | ./logs |
-| `level` | 日志级别 | info |
+| `level` | 最低日志级别（`debug`/`info`/`warn`/`error`），配了 `levels` 时失效 | info |
+| `mode` | 输出模式，见下表 | split |
+| `levels` | 级别白名单，**只输出列出的级别**（如 `[warn, error]`）；留空则按 `level` 阈值输出 | 空 |
+| `disable_console` | 关闭控制台输出（容器里日志已交给 stdout 收集时可关） | false |
+
+`mode` 三种取值：
+
+| 模式 | 产物 | 说明 |
+|------|------|------|
+| `split`（默认） | `debug.log` `info.log` `warn.log` `error.log` | 按级别分文件，**文件之间不重叠**，每个文件只有该级别；`fatal` 归入 `error.log` |
+| `range` | `debug.log` `info.log` `warn.log` `error.log` | 按级别分文件，**内容向上叠加**：`warn.log` 里含 warn 及以上，方便"只看异常及更严重" |
+| `single` | `app.log` | 所有日志进一个文件，只按级别过滤 |
+
+只会为真正生效的级别创建文件：`level: info` 时不会出现空的 `debug.log`。`levels` 与 `mode` 可组合，例如 `mode: single` + `levels: [warn, error]` 就是"一个文件里只有告警和错误"。
 
 ### trace
 
