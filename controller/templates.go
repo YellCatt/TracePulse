@@ -90,12 +90,16 @@ main{max-width:1280px;margin:0 auto;padding:14px 12px 40px}
   background:var(--bg);border:1px solid var(--border);border-radius:6px;
   font-family:inherit;-webkit-appearance:none;appearance:none}
 .field input:focus,.field select:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:var(--accent)}
-.actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px}
+/* 操作行与快捷行横跨整个筛选网格，避免被挤在 190px 的单列里折行堆叠 */
+.actions{grid-column:1/-1;display:flex;flex-wrap:nowrap;gap:8px;align-items:center;margin-top:12px;overflow-x:auto}
 button,.btn{display:inline-block;padding:7px 14px;font-size:13px;font-family:inherit;
   color:var(--fg);background:var(--bg);border:1px solid var(--border);border-radius:6px;cursor:pointer}
 button:hover,.btn:hover{text-decoration:none;border-color:var(--muted)}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-.quick{display:flex;flex-wrap:nowrap;gap:6px;margin-top:10px;align-items:center;overflow-x:auto;padding-bottom:4px}
+.quick{grid-column:1/-1;display:flex;flex-wrap:nowrap;gap:6px;margin-top:10px;align-items:center;
+  overflow-x:auto;padding-bottom:4px;-webkit-overflow-scrolling:touch}
+/* 内部禁止折行：否则窄容器里「最近 30 分钟」会断成两行，看起来像竖排 */
+.quick > span,.quick a{white-space:nowrap;flex:0 0 auto}
 .quick a{padding:2px 10px;border:1px solid var(--border);border-radius:20px;
   background:var(--bg);color:var(--muted);font-size:12px}
 .quick a:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
