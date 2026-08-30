@@ -1,7 +1,0 @@
-2026-08-30 07:05:02	error	logger/logger.go:119	server exited	{"error": "listen tcp :8086: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted."}
-github.com/example/tracepulse/logger.Error
-	D:/d/TracePulse/logger/logger.go:119
-main.main
-	D:/d/TracePulse/main.go:94
-runtime.main
-	C:/Program Files/Go/src/runtime/proc.go:290
