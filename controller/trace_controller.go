@@ -2,6 +2,7 @@
 package controller
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -391,6 +392,94 @@ func (c *TraceController) URLStatsPage(w http.ResponseWriter, r *http.Request) {
 	data.build(result)
 	data.Queried = true
 	c.renderURLStats(w, http.StatusOK, data)
+}
+
+// URLStatsExportCSV 把当前过滤条件下的接口统计导出成 CSV 文件。
+//
+// 走的是与页面完全相同的查询链路（parseURLStatsFilter + ListURLStats），所以导出的
+// 数字与屏幕上看到的一致 —— 「表里 12 次、导出来 10 次」这种事最伤排查者的信任。
+//
+// CSV 特有的三个坑，这里都处理了：
+//  1. BOM：Excel 默认按本地编码（中文环境是 GBK）读无 BOM 的 CSV，中文表头会变乱码；
+//  2. 公式注入：以 = + - @ 开头的单元格会被 Excel 当公式执行，而 url 是外部上报的
+//     不可信内容，统一加前导单引号打回文本；
+//  3. 耗时列导原始毫秒而不是 "1.20s"：导出是为了再加工（算 P95、画趋势图），
+//     格式化后的字符串还得再解析一遍，等于自找麻烦。
+func (c *TraceController) URLStatsExportCSV(w http.ResponseWriter, r *http.Request) {
+	filter, err := parseURLStatsFilter(r.URL.Query())
+	if err != nil {
+		logger.Debug("url stats export rejected bad filter",
+			zap.Error(err),
+			zap.String("remote_addr", r.RemoteAddr),
+		)
+		writeJSON(w, http.StatusBadRequest, errorResp(err.Error()))
+		return
+	}
+
+	result, err := c.traceService.ListURLStats(filter)
+	if err != nil {
+		logger.Error("url stats export failed",
+			zap.String("service", filter.Service),
+			zap.Error(err))
+		writeJSON(w, http.StatusInternalServerError, errorResp(err.Error()))
+		return
+	}
+
+	filename := fmt.Sprintf("url-stats-%s.csv", time.Now().In(view.Loc).Format("20060102-150405"))
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+
+	// Excel 靠 BOM 识别 UTF-8，缺了它中文表头全是乱码。
+	_, _ = w.Write([]byte{0xEF, 0xBB, 0xBF})
+
+	cw := csv.NewWriter(w)
+	_ = cw.Write([]string{
+		"服务名", "接口URL", "调用次数", "错误次数", "错误率(%)",
+		"平均耗时(ms)", "最大耗时(ms)", "最近调用时间",
+	})
+	for _, row := range result.Rows {
+		_ = cw.Write([]string{
+			csvCell(row.Service),
+			csvCell(row.URL),
+			strconv.FormatInt(row.CallCount, 10),
+			strconv.FormatInt(row.ErrorCount, 10),
+			strconv.FormatFloat(row.ErrorRatePercent(), 'f', 1, 64),
+			strconv.FormatInt(row.AvgDuration, 10),
+			strconv.FormatInt(row.MaxDuration, 10),
+			view.FormatTime(row.LastTime.Time),
+		})
+	}
+	cw.Flush()
+
+	if err := cw.Error(); err != nil {
+		// 响应头已经发出去了，只能记日志：客户端会拿到一个截断的文件，
+		// 但至少错误信息不会以 HTML 的形式混进 CSV 里。
+		logger.Error("url stats csv write failed",
+			zap.Int("rows", len(result.Rows)), zap.Error(err))
+		return
+	}
+
+	logger.Debug("url stats exported",
+		zap.Int("rows", len(result.Rows)),
+		zap.String("service", filter.Service),
+		zap.String("file", filename),
+	)
+}
+
+// csvCell 中和 CSV 公式注入：Excel / WPS / Google Sheets 会把以 = + - @ 开头的
+// 单元格当公式求值，而接口名是外部上报的，可能被构造成拉取远程数据的公式。
+// 加前导单引号后所有表格软件都把它当纯文本。
+func csvCell(s string) string {
+	if s == "" {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	}
+	return s
 }
 
 func (c *TraceController) renderURLStats(w http.ResponseWriter, status int, data *urlStatsPageData) {
@@ -949,17 +1038,13 @@ func (d *urlStatsPageData) build(result *model.URLStatsResult) {
 	d.Rows = make([]urlStatsRow, 0, len(result.Rows))
 	for i := range result.Rows {
 		r := result.Rows[i]
-		errRate := ""
-		if r.CallCount > 0 {
-			errRate = fmt.Sprintf("%.1f%%", float64(r.ErrorCount)/float64(r.CallCount)*100)
-		}
 		d.Rows = append(d.Rows, urlStatsRow{
 			Service:     r.Service,
 			URL:         r.URL,
 			URLShort:    view.Truncate(r.URL, 80),
 			CallCount:   r.CallCount,
 			ErrorCount:  r.ErrorCount,
-			ErrorRate:   errRate,
+			ErrorRate:   r.ErrorRate(),
 			AvgDuration: view.FormatDuration(r.AvgDuration),
 			MaxDuration: view.FormatDuration(r.MaxDuration),
 			LastTime:    view.FormatTime(r.LastTime.Time),
@@ -1001,6 +1086,15 @@ func (d *urlStatsPageData) QuickURL(args ...string) template.URL {
 // PageURL 生成当前过滤条件对应的完整链接。
 func (d *urlStatsPageData) PageURL() template.URL {
 	return template.URL("/url-stats?" + d.filterValues().Encode())
+}
+
+// ExportURL 生成「导出 CSV」链接，带上当前过滤条件。
+// 与 PageURL 同源，保证导出的就是屏幕上这一份数据。
+func (d *urlStatsPageData) ExportURL() template.URL {
+	if s := d.filterValues().Encode(); s != "" {
+		return template.URL("/url-stats/export?" + s)
+	}
+	return template.URL("/url-stats/export")
 }
 
 // ------------------------------------------------------------------ URL 统计参数解析 ----

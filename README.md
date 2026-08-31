@@ -39,6 +39,8 @@ go build -o tracepulse
 |------|------|
 | 链路检索页 | http://localhost:8086/traces |
 | 链路详情页 | http://localhost:8086/trace/{trace_id} |
+| 接口调用统计页 | http://localhost:8086/url-stats |
+| 接口统计导出 CSV | http://localhost:8086/url-stats/export |
 | Swagger 文档 | http://localhost:8086/swagger/index.html |
 | 健康检查 | http://localhost:8086/health |
 | 系统监控 | http://localhost:8086/status |

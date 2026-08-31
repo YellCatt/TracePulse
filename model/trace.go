@@ -3,6 +3,7 @@ package model
 import (
 	"bytes"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -345,6 +346,20 @@ func (f *FlexTime) parseString(s string) error {
 
 var _ sql.Scanner = (*FlexTime)(nil)
 
+// Value 实现 driver.Valuer，把时间原样交给驱动。
+//
+// 为什么光有 Scan 还不够：GORM 解析结构体 schema 时，遇到 struct 类型的字段会先试着
+// 当成 time.Time，认不出来就把它当「关联关系」去猜外键，最后报
+// "invalid field found for struct ... implement the Valuer/Scanner interface"。
+// 只有同时实现 Valuer，GORM 才会取 Value() 的返回值（time.Time）当字段类型 ——
+// 否则 URLStatRow 这种聚合结果结构体根本没法 Scan，/url-stats 页面与 CSV 导出
+// 都会 500。赋值路径仍然走 Scanner，所以 SQLite 返回的 TEXT 时间照样能解析。
+func (f FlexTime) Value() (driver.Value, error) {
+	return f.Time, nil
+}
+
+var _ driver.Valuer = FlexTime{}
+
 // URLStatRow 单条 URL 统计结果。
 type URLStatRow struct {
 	Service     string   `json:"service"`
@@ -354,6 +369,26 @@ type URLStatRow struct {
 	AvgDuration int64    `json:"avg_duration_ms"`
 	MaxDuration int64    `json:"max_duration_ms"`
 	LastTime    FlexTime `json:"last_time"`
+}
+
+// ErrorRate 错误率展示串，例如 "12.3%"。
+//
+// 放在 model 上而不是页面层：JSON API、HTML 页面、CSV 导出三处都要这个数字，
+// 各算一遍迟早会算出不一样的口径。无调用时返回空串 —— 显示 "0.0%" 会让人
+// 误以为"统计到了 0 次错误"，而真相是根本没有样本。
+func (r URLStatRow) ErrorRate() string {
+	if r.CallCount <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%.1f%%", float64(r.ErrorCount)/float64(r.CallCount)*100)
+}
+
+// ErrorRatePercent 错误率的纯数值形式（0~100），保留一位小数，供 CSV 导出使用。
+func (r URLStatRow) ErrorRatePercent() float64 {
+	if r.CallCount <= 0 {
+		return 0
+	}
+	return float64(r.ErrorCount) / float64(r.CallCount) * 100
 }
 
 // URLStatsResult URL 统计列表响应。

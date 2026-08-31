@@ -482,6 +482,7 @@ table.kv td{border:none;padding:2px 0;word-break:break-all}
     <div class="actions">
       <button class="primary" type="submit">查询</button>
       <a class="btn" href="/url-stats">重置</a>
+      <a class="btn" href="{{.ExportURL}}">导出 CSV</a>
     </div>
     <div class="quick">
       <span class="muted">快捷时间范围：</span>
@@ -498,6 +499,10 @@ table.kv td{border:none;padding:2px 0;word-break:break-all}
 {{if .Queried}}
 <section class="card">
   <h2>统计结果 · 共 {{.Result.Total}} 个接口</h2>
+  <div class="actions">
+    <a class="btn" href="{{.ExportURL}}">导出 CSV（当前条件共 {{.Result.Total}} 行）</a>
+    <span class="muted">耗时列导出为原始毫秒，方便再做聚合与画图</span>
+  </div>
   {{if .Rows}}
   <div class="table-wrap">
   <table class="list">
