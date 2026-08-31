@@ -336,7 +336,7 @@ func TestListURLStatsGroupsByServiceAndURL(t *testing.T) {
 		Status:     model.TraceStatusError,
 		StartTime:  base.Add(2 * time.Second),
 		EndTime:    base.Add(3 * time.Second),
-		DurationMs: 1000,
+		DurationMs: 3000,
 		HasError:   true,
 		EventCount: 2,
 	}
@@ -352,7 +352,7 @@ func TestListURLStatsGroupsByServiceAndURL(t *testing.T) {
 		Status:     model.TraceStatusOK,
 		StartTime:  base.Add(3 * time.Second),
 		EndTime:    base.Add(4 * time.Second),
-		DurationMs: 1000,
+		DurationMs: 500,
 		HasError:   false,
 		EventCount: 1,
 	}
@@ -408,6 +408,23 @@ func TestListURLStatsGroupsByServiceAndURL(t *testing.T) {
 	}
 	if payRow.ErrorCount != 0 {
 		t.Errorf("pay error_count = %d, want 0", payRow.ErrorCount)
+	}
+
+	// 耗时聚合：order 行是 1000 与 3000，平均 2000、最大 3000；pay 行只有 500。
+	// 这组断言守的是一个踩过的坑：SQL 别名 avg_duration_ms / max_duration_ms 与
+	// GORM 推导出的列名 avg_duration / max_duration 对不上，两列会被静默丢弃，
+	// 页面和 CSV 恒为 0ms 且不报错 —— 必须断住，别让它悄悄退化回去。
+	if orderRow.AvgDuration != 2000 {
+		t.Errorf("order avg_duration_ms = %d, want 2000", orderRow.AvgDuration)
+	}
+	if orderRow.MaxDuration != 3000 {
+		t.Errorf("order max_duration_ms = %d, want 3000", orderRow.MaxDuration)
+	}
+	if payRow.AvgDuration != 500 {
+		t.Errorf("pay avg_duration_ms = %d, want 500", payRow.AvgDuration)
+	}
+	if payRow.MaxDuration != 500 {
+		t.Errorf("pay max_duration_ms = %d, want 500", payRow.MaxDuration)
 	}
 
 	// 按 service 过滤：只剩 order-svc 的一行。

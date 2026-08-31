@@ -145,7 +145,7 @@ func (r *traceRepository) ListURLStats(filter model.URLStatsFilter) ([]model.URL
 			url,
 			COUNT(*) AS call_count,
 			COALESCE(SUM(CASE WHEN has_error = 1 THEN 1 ELSE 0 END), 0) AS error_count,
-			COALESCE(AVG(duration_ms), 0) AS avg_duration_ms,
+			COALESCE(CAST(AVG(duration_ms) AS INTEGER), 0) AS avg_duration_ms,
 			COALESCE(MAX(duration_ms), 0) AS max_duration_ms,
 			MAX(start_time) AS last_time
 		`).

@@ -361,13 +361,19 @@ func (f FlexTime) Value() (driver.Value, error) {
 var _ driver.Valuer = FlexTime{}
 
 // URLStatRow 单条 URL 统计结果。
+//
+// AvgDuration / MaxDuration 的 gorm column tag 不能省：GORM 的 Scan 只按 DBName
+// 或 Go 字段名匹配列（见 schema.Schema.LookUpField），既不看 json tag 也不做
+// 前缀裁剪。字段 AvgDuration 的 DBName 由 NamingStrategy 推导成 avg_duration，
+// 而 SQL 别名带 _ms 后缀，两条路都对不上 —— 没有这个 tag，耗时两列会被静默
+// 丢弃，页面与 CSV 导出恒为 0ms，且不抛任何错误，属于最难察觉的一类 bug。
 type URLStatRow struct {
 	Service     string   `json:"service"`
 	URL         string   `json:"url"`
 	CallCount   int64    `json:"call_count"`
 	ErrorCount  int64    `json:"error_count"`
-	AvgDuration int64    `json:"avg_duration_ms"`
-	MaxDuration int64    `json:"max_duration_ms"`
+	AvgDuration int64    `gorm:"column:avg_duration_ms" json:"avg_duration_ms"`
+	MaxDuration int64    `gorm:"column:max_duration_ms" json:"max_duration_ms"`
 	LastTime    FlexTime `json:"last_time"`
 }
 
