@@ -561,6 +561,149 @@ func TestListTracesJSONReturnsPaging(t *testing.T) {
 	}
 }
 
+// TestURLStatsJSONGroupsByURL URL 统计接口要按 service+url 聚合，一个 trace_id 算一次。
+func TestURLStatsJSONGroupsByURL(t *testing.T) {
+	c, done := newTestController(t)
+	defer done()
+
+	// 上报两条同 service+url 的链路，应该在统计里合并成一条，count=2。
+	body := `{"service_name":"order-svc","url":"/api/order/create","events":[
+		{"trace_id":"u-1","level":"info","module":"order","event":"start"},
+		{"trace_id":"u-1","level":"info","module":"order","event":"end"}
+	]}`
+	reportReq := httptest.NewRequest(http.MethodPost, "/api/traces/report", strings.NewReader(body))
+	reportRec := httptest.NewRecorder()
+	c.ReportEvents(reportRec, reportReq)
+	if reportRec.Code != http.StatusOK {
+		t.Fatalf("first report: %d", reportRec.Code)
+	}
+
+	body2 := `{"service_name":"order-svc","url":"/api/order/create","events":[
+		{"trace_id":"u-2","level":"info","module":"order","event":"start"},
+		{"trace_id":"u-2","level":"error","module":"order","event":"fail","message":"db timeout"}
+	]}`
+	reportReq2 := httptest.NewRequest(http.MethodPost, "/api/traces/report", strings.NewReader(body2))
+	reportRec2 := httptest.NewRecorder()
+	c.ReportEvents(reportRec2, reportReq2)
+	if reportRec2.Code != http.StatusOK {
+		t.Fatalf("second report: %d", reportRec2.Code)
+	}
+
+	waitForTrace(t, c, "u-1")
+	waitForTrace(t, c, "u-2")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/url-stats", nil)
+	rec := httptest.NewRecorder()
+	c.URLStatsJSON(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("url stats status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+
+	var out model.URLStatsResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Total != 1 {
+		t.Fatalf("total = %d, want 1 (two traces should group into one url)", out.Total)
+	}
+	if len(out.Rows) != 1 {
+		t.Fatalf("rows len = %d, want 1", len(out.Rows))
+	}
+	row := out.Rows[0]
+	if row.Service != "order-svc" {
+		t.Errorf("service = %q, want order-svc", row.Service)
+	}
+	if row.URL != "/api/order/create" {
+		t.Errorf("url = %q, want /api/order/create", row.URL)
+	}
+	if row.CallCount != 2 {
+		t.Errorf("call_count = %d, want 2", row.CallCount)
+	}
+	if row.ErrorCount != 1 {
+		t.Errorf("error_count = %d, want 1", row.ErrorCount)
+	}
+	if out.Rows[0].ErrorRate == "" {
+		t.Errorf("error_rate should not be empty when error_count > 0")
+	}
+}
+
+// TestURLStatsJSONRejectsBadTime 非法时间参数要报 400，而不是静默忽略。
+func TestURLStatsJSONRejectsBadTime(t *testing.T) {
+	c, done := newTestController(t)
+	defer done()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/url-stats?start_time=昨天", nil)
+	rec := httptest.NewRecorder()
+	c.URLStatsJSON(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// TestURLStatsPageRendersTable HTML 页面要正常渲染，且包含统计结果。
+func TestURLStatsPageRendersTable(t *testing.T) {
+	c, done := newTestController(t)
+	defer done()
+
+	body := `{"service_name":"api","url":"/ping","events":[
+		{"trace_id":"p-1","level":"info","module":"m","event":"start"},
+		{"trace_id":"p-1","level":"info","module":"m","event":"end"}
+	]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/traces/report", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.ReportEvents(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report: %d", rec.Code)
+	}
+	waitForTrace(t, c, "p-1")
+
+	pageReq := httptest.NewRequest(http.MethodGet, "/url-stats", nil)
+	pageRec := httptest.NewRecorder()
+	c.URLStatsPage(pageRec, pageReq)
+
+	if pageRec.Code != http.StatusOK {
+		t.Fatalf("page status = %d, want 200 (%s)", pageRec.Code, pageRec.Body.String())
+	}
+
+	bodyStr := pageRec.Body.String()
+	for _, want := range []string{"接口调用统计", "/ping", "api", "调用次数"} {
+		if !strings.Contains(bodyStr, want) {
+			t.Errorf("page body missing %q", want)
+		}
+	}
+}
+
+// TestURLStatsPageFiltersByService 按服务名过滤要生效，只返回指定服务的统计。
+func TestURLStatsPageFiltersByService(t *testing.T) {
+	c, done := newTestController(t)
+	defer done()
+
+	body := `{"service_name":"svc-a","url":"/a","events":[
+		{"trace_id":"f-1","level":"info","module":"m","event":"start"},
+		{"trace_id":"f-1","level":"info","module":"m","event":"end"}
+	]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/traces/report", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.ReportEvents(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report: %d", rec.Code)
+	}
+	waitForTrace(t, c, "f-1")
+
+	pageReq := httptest.NewRequest(http.MethodGet, "/url-stats?service=svc-a", nil)
+	pageRec := httptest.NewRecorder()
+	c.URLStatsPage(pageRec, pageReq)
+
+	if pageRec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", pageRec.Code)
+	}
+	if !strings.Contains(pageRec.Body.String(), "svc-a") {
+		t.Errorf("filtered page should contain svc-a, got: %s", pageRec.Body.String())
+	}
+}
+
 // TestStatsJSONReportsQueueWatermark 队列水位是判断"该不该扩容"的唯一依据。
 func TestStatsJSONReportsQueueWatermark(t *testing.T) {
 	c, done := newTestController(t)

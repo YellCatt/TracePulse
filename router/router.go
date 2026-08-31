@@ -34,10 +34,12 @@ func NewRouter(
 	mux.HandleFunc("GET /api/traces", traceController.ListTracesJSON)
 	mux.HandleFunc("GET /api/traces/stats", traceController.StatsJSON)
 	mux.HandleFunc("GET /api/traces/{trace_id}", traceController.GetTraceJSON)
+	mux.HandleFunc("GET /api/url-stats", traceController.URLStatsJSON)
 
 	// ---------------- 链路：内置页面 ----------------
 	mux.HandleFunc("GET /traces", traceController.SearchPage)
 	mux.HandleFunc("GET /trace/{trace_id}", traceController.TraceDetailPage)
+	mux.HandleFunc("GET /url-stats", traceController.URLStatsPage)
 	// "/{$}" 只精确匹配根路径。如果写成 "GET /" 就成了全方法通配，
 	// 会与下面的 "/swagger/" 前缀路由冲突并直接 panic。
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {

@@ -28,6 +28,7 @@ type demoEvent struct {
 // demoTrace 一条演示链路的构造描述。
 type demoTrace struct {
 	service      string
+	url          string
 	status       string
 	errorMessage string
 	// ago 是链路起点距现在的时长，用来在列表页铺开时间轴。
@@ -39,8 +40,9 @@ type demoTrace struct {
 // 一打开页面就能看到列表、详情、慢步骤标记、错误高亮与 span 层级的实际效果。
 func demoTraces() []demoTrace {
 	return []demoTrace{
-		{ // 正常下单：走完 start → ... → end，页面上是绿色 ok。
+		{
 			service: "demo-order-api",
+			url:     "https://order.example.com/api/order/create",
 			status:  model.TraceStatusOK,
 			ago:     4 * time.Minute,
 			events: []demoEvent{
@@ -56,8 +58,9 @@ func demoTraces() []demoTrace {
 					`{"order_id":"NO202608300001","amount":199.9}`, "", "6f1a2b3c", ""},
 			},
 		},
-		{ // 支付回调验签失败：error 级事件，详情里整条链路标红。
+		{
 			service:      "demo-payment-api",
+			url:          "https://pay.example.com/api/wx/callback",
 			status:       model.TraceStatusError,
 			errorMessage: "signature mismatch: expected 9f2c1a..., got 3ab17d...",
 			ago:          21 * time.Minute,
@@ -73,8 +76,9 @@ func demoTraces() []demoTrace {
 					"", "订单支付状态未更新，需人工核对", "a1b2c3d4", ""},
 			},
 		},
-		{ // 上游慢调用：warn 级，中间一步的间隔远超整条链路的 30%，会被标成慢步骤。
+		{
 			service: "demo-api-gateway",
+			url:     "https://api.example.com/api/user/profile",
 			status:  model.TraceStatusWarn,
 			ago:     47 * time.Minute,
 			events: []demoEvent{
@@ -164,6 +168,7 @@ func SeedDemoData(repo repository.TraceRepository, force bool) (int, error) {
 		trace := &model.Trace{
 			TraceID:      traceID,
 			ServiceName:  d.service,
+			URL:          d.url,
 			Status:       d.status,
 			StartTime:    start,
 			EndTime:      end,

@@ -209,6 +209,7 @@ table.kv td{border:none;padding:2px 0;word-break:break-all}
   <a class="brand" href="/traces">Trace<span>Pulse</span></a>
   <nav>
     <a href="/traces">检索</a>
+    <a href="/url-stats">接口统计</a>
     <a href="/health">健康</a>
   </nav>
 </header>
@@ -455,6 +456,86 @@ table.kv td{border:none;padding:2px 0;word-break:break-all}
   </div>
   {{else}}
   <div class="empty">没有匹配的链路。试着放宽时间范围，或清空条件重新检索。</div>
+  {{end}}
+</section>
+{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "url_stats.html"}}{{template "head" .}}
+
+<section class="card">
+  <h2>接口调用统计</h2>
+  <form class="filters" method="get" action="/url-stats">
+    <div class="field">
+      <label for="f-service">服务名（留空查全部）</label>
+      <input id="f-service" name="service" value="{{.Form.Service}}" placeholder="例如 api-gateway">
+    </div>
+    <div class="field">
+      <label for="f-start">开始时间</label>
+      <input id="f-start" name="start_time" value="{{.Form.StartRaw}}" placeholder="2026-01-02 15:04:05 或 1h">
+    </div>
+    <div class="field">
+      <label for="f-end">结束时间</label>
+      <input id="f-end" name="end_time" value="{{.Form.EndRaw}}" placeholder="留空表示现在">
+    </div>
+
+    <div class="actions">
+      <button class="primary" type="submit">查询</button>
+      <a class="btn" href="/url-stats">重置</a>
+    </div>
+    <div class="quick">
+      <span class="muted">快捷时间范围：</span>
+      <a href="{{.QuickURL "30m"}}">最近 30 分钟</a>
+      <a href="{{.QuickURL "1h"}}">最近 1 小时</a>
+      <a href="{{.QuickURL "24h"}}">最近 24 小时</a>
+      <a href="{{.QuickURL "7d"}}">最近 7 天</a>
+    </div>
+  </form>
+</section>
+
+{{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}
+
+{{if .Queried}}
+<section class="card">
+  <h2>统计结果 · 共 {{.Result.Total}} 个接口</h2>
+  {{if .Rows}}
+  <div class="table-wrap">
+  <table class="list">
+    <thead>
+      <tr>
+        <th>服务名</th>
+        <th>接口 URL</th>
+        <th>调用次数</th>
+        <th>错误次数</th>
+        <th>错误率</th>
+        <th>平均耗时</th>
+        <th>最大耗时</th>
+        <th>最近调用</th>
+      </tr>
+    </thead>
+    <tbody>
+    {{range .Rows}}
+      <tr class="{{if .HasError}}row-err{{end}}">
+        <td data-label="服务名">{{if .Service}}{{.Service}}{{else}}<span class="muted">-</span>{{end}}</td>
+        <td data-label="接口 URL">
+          {{if .URL}}
+            {{if isAbsURL .URL}}<a class="urlbox" href="{{.URL}}" target="_blank" rel="noopener noreferrer" title="{{.URL}}">{{.URLShort}}</a>
+            {{else}}<code class="urlbox" title="{{.URL}}">{{.URLShort}}</code>{{end}}
+          {{else}}<span class="muted">-</span>{{end}}
+        </td>
+        <td data-label="调用次数"><strong>{{.CallCount}}</strong></td>
+        <td data-label="错误次数">{{if .ErrorCount}}<span class="status status-error">{{.ErrorCount}}</span>{{else}}0{{end}}</td>
+        <td data-label="错误率">{{if .ErrorRate}}{{.ErrorRate}}{{else}}<span class="muted">-</span>{{end}}</td>
+        <td data-label="平均耗时">{{.AvgDuration}}</td>
+        <td data-label="最大耗时">{{.MaxDuration}}</td>
+        <td data-label="最近调用">{{.LastTime}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  {{else}}
+  <div class="empty">没有匹配的接口调用数据。试着放宽时间范围，或清空条件重新查询。</div>
   {{end}}
 </section>
 {{end}}

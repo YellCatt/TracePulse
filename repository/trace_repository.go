@@ -19,6 +19,7 @@ type TraceRepository interface {
 	UpdateTrace(trace *model.Trace) error
 	GetTraceByID(traceID string) (*model.Trace, error)
 	ListTraces(filter model.TraceFilter) ([]model.Trace, int64, error)
+	ListURLStats(filter model.URLStatsFilter) ([]model.URLStatRow, error)
 	DeleteTracesBefore(cutoff time.Time) (int64, error)
 
 	CreateEvent(event *model.TraceEvent) error
@@ -126,6 +127,53 @@ func (r *traceRepository) ListTraces(filter model.TraceFilter) ([]model.Trace, i
 	}
 
 	return traces, total, nil
+}
+
+// ListURLStats 按 URL 分组统计调用次数、错误数、耗时等。
+//
+// 实现要点：
+//  1. 一个 trace_id 算一次调用（GROUP BY url 即可）；
+//  2. 支持按 service_name 过滤，也支持时间范围过滤；
+//  3. 结果按调用次数倒序，热点 URL 排在前面。
+func (r *traceRepository) ListURLStats(filter model.URLStatsFilter) ([]model.URLStatRow, error) {
+	var rows []model.URLStatRow
+
+	q := r.db.Model(&model.Trace{}).
+		Select(`
+			service_name AS service,
+			url,
+			COUNT(*) AS call_count,
+			COALESCE(SUM(CASE WHEN has_error = 1 THEN 1 ELSE 0 END), 0) AS error_count,
+			COALESCE(AVG(duration_ms), 0) AS avg_duration_ms,
+			COALESCE(MAX(duration_ms), 0) AS max_duration_ms,
+			MAX(start_time) AS last_time
+		`).
+		Where("url != ''").
+		Group("service_name, url").
+		Order("call_count DESC")
+
+	if filter.Service != "" {
+		q = q.Where("service_name = ?", filter.Service)
+	}
+	if !filter.StartTime.IsZero() {
+		q = q.Where("start_time >= ?", filter.StartTime)
+	}
+	if !filter.EndTime.IsZero() {
+		q = q.Where("start_time <= ?", filter.EndTime)
+	}
+
+	err := q.Scan(&rows).Error
+	if err != nil {
+		logger.Error("list url stats failed",
+			zap.String("service", filter.Service), zap.Error(err))
+		return nil, err
+	}
+
+	logger.Debug("url stats queried",
+		zap.Int("count", len(rows)),
+		zap.String("service", filter.Service),
+	)
+	return rows, nil
 }
 
 // applyTraceFilters 把非零过滤条件拼到查询上。

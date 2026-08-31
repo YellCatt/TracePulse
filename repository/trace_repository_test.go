@@ -304,3 +304,130 @@ func TestDeleteCleansUpOrphans(t *testing.T) {
 		t.Fatalf("%d events残留 after cleanup, want 0", len(remaining))
 	}
 }
+
+// TestListURLStatsGroupsByServiceAndURL 按 service+url 聚合，一个 trace_id 算一次。
+// 这是"接口调用统计"页的核心数据源。
+func TestListURLStatsGroupsByServiceAndURL(t *testing.T) {
+	repo, closeDB := newTestRepo(t)
+	defer closeDB()
+
+	base := time.Now().Add(-time.Hour)
+
+	// 同一 service+url 上报 2 次，应聚合为一行，call_count=2, error_count=1。
+	tr1 := &model.Trace{
+		TraceID:    "s-1",
+		ServiceName: "order-svc",
+		URL:        "/api/order/create",
+		Status:     model.TraceStatusOK,
+		StartTime:  base,
+		EndTime:    base.Add(time.Second),
+		DurationMs: 1000,
+		HasError:   false,
+		EventCount: 2,
+	}
+	if err := repo.CreateTrace(tr1); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	tr2 := &model.Trace{
+		TraceID:    "s-2",
+		ServiceName: "order-svc",
+		URL:        "/api/order/create",
+		Status:     model.TraceStatusError,
+		StartTime:  base.Add(2 * time.Second),
+		EndTime:    base.Add(3 * time.Second),
+		DurationMs: 1000,
+		HasError:   true,
+		EventCount: 2,
+	}
+	if err := repo.CreateTrace(tr2); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// 另一个 service+url，用来验证分组不是全表聚合。
+	tr3 := &model.Trace{
+		TraceID:    "s-3",
+		ServiceName: "pay-svc",
+		URL:        "/api/pay/callback",
+		Status:     model.TraceStatusOK,
+		StartTime:  base.Add(3 * time.Second),
+		EndTime:    base.Add(4 * time.Second),
+		DurationMs: 1000,
+		HasError:   false,
+		EventCount: 1,
+	}
+	if err := repo.CreateTrace(tr3); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// 空 url 的链路应被过滤掉（WHERE url != ''）。
+	tr4 := &model.Trace{
+		TraceID:    "s-4",
+		ServiceName: "ghost-svc",
+		Status:     model.TraceStatusOK,
+		StartTime:  base.Add(4 * time.Second),
+		EndTime:    base.Add(5 * time.Second),
+		DurationMs: 1000,
+		HasError:   false,
+		EventCount: 1,
+	}
+	if err := repo.CreateTrace(tr4); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	rows, err := repo.ListURLStats(model.URLStatsFilter{})
+	if err != nil {
+		t.Fatalf("list url stats: %v", err)
+	}
+
+	// 应该只有 2 行：order-svc /api/order/create 与 pay-svc /api/pay/callback
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2 (empty-url row must be skipped)", len(rows))
+	}
+
+	var orderRow, payRow model.URLStatRow
+	for _, r := range rows {
+		if r.Service == "order-svc" {
+			orderRow = r
+		}
+		if r.Service == "pay-svc" {
+			payRow = r
+		}
+	}
+	if orderRow.URL != "/api/order/create" {
+		t.Errorf("order row url = %q, want /api/order/create", orderRow.URL)
+	}
+	if orderRow.CallCount != 2 {
+		t.Errorf("order call_count = %d, want 2", orderRow.CallCount)
+	}
+	if orderRow.ErrorCount != 1 {
+		t.Errorf("order error_count = %d, want 1", orderRow.ErrorCount)
+	}
+	if payRow.CallCount != 1 {
+		t.Errorf("pay call_count = %d, want 1", payRow.CallCount)
+	}
+	if payRow.ErrorCount != 0 {
+		t.Errorf("pay error_count = %d, want 0", payRow.ErrorCount)
+	}
+
+	// 按 service 过滤：只剩 order-svc 的一行。
+	filtered, err := repo.ListURLStats(model.URLStatsFilter{Service: "order-svc"})
+	if err != nil {
+		t.Fatalf("list with service filter: %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].Service != "order-svc" {
+		t.Errorf("service filter: got %d rows, want 1 order-svc row", len(filtered))
+	}
+
+	// 时间范围过滤：截断为零行。
+	rangeFiltered, err := repo.ListURLStats(model.URLStatsFilter{
+		StartTime: base.Add(-24 * time.Hour),
+		EndTime:   base.Add(-23 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("list with time range: %v", err)
+	}
+	if len(rangeFiltered) != 0 {
+		t.Errorf("time range outside should yield 0 rows, got %d", len(rangeFiltered))
+	}
+}

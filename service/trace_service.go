@@ -49,6 +49,7 @@ type TraceService interface {
 	ReportEvents(events []model.TraceEvent, meta ReportMeta) error
 	GetTrace(traceID string) (*model.Trace, []model.TraceEvent, error)
 	ListTraces(filter model.TraceFilter) (*model.TraceListResult, error)
+	ListURLStats(filter model.URLStatsFilter) (*model.URLStatsResult, error)
 	Stats() TraceStats
 	Shutdown()
 }
@@ -264,6 +265,21 @@ func (s *traceService) ListTraces(filter model.TraceFilter) (*model.TraceListRes
 		Page:       filter.Page,
 		PageSize:   filter.PageSize,
 		TotalPages: totalPages,
+	}, nil
+}
+
+func (s *traceService) ListURLStats(filter model.URLStatsFilter) (*model.URLStatsResult, error) {
+	rows, err := s.repo.ListURLStats(filter)
+	if err != nil {
+		return nil, err
+	}
+
+	return &model.URLStatsResult{
+		Rows:      rows,
+		Total:     len(rows),
+		Service:   filter.Service,
+		StartTime: filter.StartTime,
+		EndTime:   filter.EndTime,
 	}, nil
 }
 

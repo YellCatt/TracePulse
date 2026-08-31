@@ -209,6 +209,24 @@ func (c *TraceController) ListTracesJSON(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, result)
 }
 
+// URLStatsJSON 返回 URL 统计数据（JSON API）。
+func (c *TraceController) URLStatsJSON(w http.ResponseWriter, r *http.Request) {
+	filter, err := parseURLStatsFilter(r.URL.Query())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResp(err.Error()))
+		return
+	}
+
+	result, err := c.traceService.ListURLStats(filter)
+	if err != nil {
+		logger.Error("url stats json failed", zap.Error(err))
+		writeJSON(w, http.StatusInternalServerError, errorResp(err.Error()))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 // StatsJSON 返回队列水位等运行时指标，便于判断是否需要扩容或调大队列。
 func (c *TraceController) StatsJSON(w http.ResponseWriter, r *http.Request) {
 	stats := c.traceService.Stats()
@@ -298,6 +316,45 @@ func (c *TraceController) SearchPage(w http.ResponseWriter, r *http.Request) {
 
 	data.Queried = data.Result != nil
 	c.renderList(w, http.StatusOK, data)
+}
+
+// URLStatsPage URL 统计页面：按服务名下的接口 URL 分组展示调用次数。
+func (c *TraceController) URLStatsPage(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	data := &urlStatsPageData{
+		Title:           "接口调用统计 · TracePulse",
+		PageSizeOptions: pageSizeOptions,
+	}
+
+	filter, err := parseURLStatsFilter(q)
+	if err != nil {
+		c.renderURLStats(w, http.StatusBadRequest, data.withError(err.Error()))
+		return
+	}
+
+	data.Filter = filter
+	data.Form = urlStatsFilterToForm(filter)
+	data.Form.StartRaw = strings.TrimSpace(q.Get("start_time"))
+	data.Form.EndRaw = strings.TrimSpace(q.Get("end_time"))
+
+	result, err := c.traceService.ListURLStats(filter)
+	if err != nil {
+		logger.Error("url stats page failed", zap.Error(err))
+		c.renderURLStats(w, http.StatusInternalServerError, data.withError(err.Error()))
+		return
+	}
+	logger.Debug("url stats page queried",
+		zap.Int("total", result.Total),
+	)
+	data.Result = result
+	data.build(result)
+	data.Queried = true
+	c.renderURLStats(w, http.StatusOK, data)
+}
+
+func (c *TraceController) renderURLStats(w http.ResponseWriter, status int, data *urlStatsPageData) {
+	renderHTML(w, c.templates, "url_stats.html", status, data)
 }
 
 func (c *TraceController) renderDetail(w http.ResponseWriter, status int, data *detailPageData) {
@@ -789,6 +846,140 @@ func parseRelative(s string) (time.Duration, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// -------------------------------------------------------- URL 统计页数据结构 ----
+
+type urlStatsPageData struct {
+	Title   string
+	Error   string
+	Queried bool
+
+	Filter model.URLStatsFilter
+	Form   urlStatsFilterForm
+	Result *model.URLStatsResult
+	Rows   []urlStatsRow
+
+	PageSizeOptions []int
+}
+
+type urlStatsFilterForm struct {
+	Service  string
+	Start    string
+	End      string
+	StartRaw string
+	EndRaw   string
+}
+
+type urlStatsRow struct {
+	Service     string
+	URL         string
+	URLShort    string
+	CallCount   int64
+	ErrorCount  int64
+	ErrorRate   string
+	AvgDuration string
+	MaxDuration string
+	LastTime    string
+	HasError    bool
+}
+
+func (d *urlStatsPageData) withError(msg string) *urlStatsPageData {
+	d.Error = msg
+	return d
+}
+
+func (d *urlStatsPageData) build(result *model.URLStatsResult) {
+	d.Rows = make([]urlStatsRow, 0, len(result.Rows))
+	for i := range result.Rows {
+		r := result.Rows[i]
+		errRate := ""
+		if r.CallCount > 0 {
+			errRate = fmt.Sprintf("%.1f%%", float64(r.ErrorCount)/float64(r.CallCount)*100)
+		}
+		d.Rows = append(d.Rows, urlStatsRow{
+			Service:     r.Service,
+			URL:         r.URL,
+			URLShort:    view.Truncate(r.URL, 80),
+			CallCount:   r.CallCount,
+			ErrorCount:  r.ErrorCount,
+			ErrorRate:   errRate,
+			AvgDuration: view.FormatDuration(r.AvgDuration),
+			MaxDuration: view.FormatDuration(r.MaxDuration),
+			LastTime:    view.FormatTime(r.LastTime),
+			HasError:    r.ErrorCount > 0,
+		})
+	}
+}
+
+// filterValues 把 URL 统计过滤条件序列化为查询串。
+func (d *urlStatsPageData) filterValues() url.Values {
+	v := url.Values{}
+	if d.Form.Service != "" {
+		v.Set("service", d.Form.Service)
+	}
+	if d.Form.Start != "" {
+		v.Set("start_time", d.Form.Start)
+	}
+	if d.Form.End != "" {
+		v.Set("end_time", d.Form.End)
+	}
+	return v
+}
+
+// QuickURL 生成快捷时间范围链接。
+func (d *urlStatsPageData) QuickURL(args ...string) template.URL {
+	if len(args) == 0 {
+		return template.URL("/url-stats")
+	}
+
+	v := d.filterValues()
+	v.Set("start_time", args[0])
+
+	return template.URL("/url-stats?" + v.Encode())
+}
+
+// PageURL 生成指定参数的链接。
+func (d *urlStatsPageData) PageURL() template.URL {
+	return template.URL("/url-stats?" + d.filterValues().Encode())
+}
+
+// ------------------------------------------------------------------ URL 统计参数解析 ----
+
+func parseURLStatsFilter(q url.Values) (model.URLStatsFilter, error) {
+	f := model.URLStatsFilter{
+		Service: strings.TrimSpace(q.Get("service")),
+	}
+
+	if v := strings.TrimSpace(q.Get("start_time")); v != "" {
+		t, ok := parseTimeFlexible(v)
+		if !ok {
+			return f, fmt.Errorf("start_time 格式无法识别: %q（支持 2026-01-02 15:04:05 / RFC3339 / 1h / 30m / 7d）", v)
+		}
+		f.StartTime = t
+	}
+	if v := strings.TrimSpace(q.Get("end_time")); v != "" {
+		t, ok := parseTimeFlexible(v)
+		if !ok {
+			return f, fmt.Errorf("end_time 格式无法识别: %q（支持 2026-01-02 15:04:05 / RFC3339 / 1h / 30m / 7d）", v)
+		}
+		f.EndTime = t
+	}
+
+	return f, nil
+}
+
+func urlStatsFilterToForm(f model.URLStatsFilter) urlStatsFilterForm {
+	form := urlStatsFilterForm{
+		Service: f.Service,
+	}
+	if !f.StartTime.IsZero() {
+		form.Start = f.StartTime.In(view.Loc).Format("2006-01-02 15:04:05")
+	}
+	if !f.EndTime.IsZero() {
+		form.End = f.EndTime.In(view.Loc).Format("2006-01-02 15:04:05")
+	}
+	return form
 }
 
 // ------------------------------------------------------------------ 工具 ----

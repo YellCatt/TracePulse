@@ -283,3 +283,30 @@ type TraceDetail struct {
 	Trace  Trace        `json:"trace"`
 	Events []TraceEvent `json:"events"`
 }
+
+// URLStatsFilter URL 统计筛选条件。
+type URLStatsFilter struct {
+	Service   string    `form:"service" json:"service"`
+	StartTime time.Time `form:"start_time" json:"start_time"`
+	EndTime   time.Time `form:"end_time" json:"end_time"`
+}
+
+// URLStatRow 单条 URL 统计结果。
+type URLStatRow struct {
+	Service     string    `json:"service"`
+	URL         string    `json:"url"`
+	CallCount   int64     `json:"call_count"`
+	ErrorCount  int64     `json:"error_count"`
+	AvgDuration int64     `json:"avg_duration_ms"`
+	MaxDuration int64     `json:"max_duration_ms"`
+	LastTime    time.Time `json:"last_time"`
+}
+
+// URLStatsResult URL 统计列表响应。
+type URLStatsResult struct {
+	Rows      []URLStatRow `json:"rows"`
+	Total     int          `json:"total"`
+	Service   string       `json:"service,omitempty"`
+	StartTime time.Time    `json:"start_time,omitempty"`
+	EndTime   time.Time    `json:"end_time,omitempty"`
+}
