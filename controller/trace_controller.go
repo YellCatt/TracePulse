@@ -210,20 +210,40 @@ func (c *TraceController) ListTracesJSON(w http.ResponseWriter, r *http.Request)
 }
 
 // URLStatsJSON 返回 URL 统计数据（JSON API）。
+//
+// 与 URLStatsPage 共享同一条查询链路，只是输出格式不同 —— 页面用服务端渲染方便排障时
+// 手机浏览器零 JS 也能看，JSON API 则给运维脚本 / BI 面板提供结构化数据。
 func (c *TraceController) URLStatsJSON(w http.ResponseWriter, r *http.Request) {
 	filter, err := parseURLStatsFilter(r.URL.Query())
 	if err != nil {
+		logger.Debug("url stats json rejected bad filter",
+			zap.Error(err),
+			zap.String("remote_addr", r.RemoteAddr),
+		)
 		writeJSON(w, http.StatusBadRequest, errorResp(err.Error()))
 		return
 	}
 
+	logger.Debug("url stats json requested",
+		zap.String("service", filter.Service),
+		zap.Time("start_time", filter.StartTime),
+		zap.Time("end_time", filter.EndTime),
+		zap.String("remote_addr", r.RemoteAddr),
+	)
+
 	result, err := c.traceService.ListURLStats(filter)
 	if err != nil {
-		logger.Error("url stats json failed", zap.Error(err))
+		logger.Error("url stats json failed",
+			zap.String("service", filter.Service),
+			zap.Error(err))
 		writeJSON(w, http.StatusInternalServerError, errorResp(err.Error()))
 		return
 	}
 
+	logger.Debug("url stats json returned",
+		zap.Int("total", result.Total),
+		zap.String("service", filter.Service),
+	)
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -319,6 +339,9 @@ func (c *TraceController) SearchPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // URLStatsPage URL 统计页面：按服务名下的接口 URL 分组展示调用次数。
+//
+// 页面交互与检索页对齐：顶部过滤表单 + 结果表格 + 快捷时间范围按钮。
+// 每行展示 service + url + 调用次数 + 错误数 + 错误率 + 平均/最大耗时 + 最近调用时间。
 func (c *TraceController) URLStatsPage(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
@@ -329,23 +352,40 @@ func (c *TraceController) URLStatsPage(w http.ResponseWriter, r *http.Request) {
 
 	filter, err := parseURLStatsFilter(q)
 	if err != nil {
+		// 参数格式错误，直接渲染 400 页面并把错误信息展示出来，比返回纯文本更友好。
+		logger.Debug("url stats page rejected bad filter",
+			zap.Error(err),
+			zap.String("remote_addr", r.RemoteAddr),
+		)
 		c.renderURLStats(w, http.StatusBadRequest, data.withError(err.Error()))
 		return
 	}
 
+	logger.Debug("url stats page requested",
+		zap.String("service", filter.Service),
+		zap.Time("start_time", filter.StartTime),
+		zap.Time("end_time", filter.EndTime),
+		zap.String("remote_addr", r.RemoteAddr),
+	)
+
 	data.Filter = filter
 	data.Form = urlStatsFilterToForm(filter)
+	// StartRaw / EndRaw 保留用户输入的原始字符串，避免 parseTimeFlexible 把 "1h" 换算成绝对时间后回填到表单。
 	data.Form.StartRaw = strings.TrimSpace(q.Get("start_time"))
 	data.Form.EndRaw = strings.TrimSpace(q.Get("end_time"))
 
 	result, err := c.traceService.ListURLStats(filter)
 	if err != nil {
-		logger.Error("url stats page failed", zap.Error(err))
+		logger.Error("url stats page failed",
+			zap.String("service", filter.Service),
+			zap.Error(err))
 		c.renderURLStats(w, http.StatusInternalServerError, data.withError(err.Error()))
 		return
 	}
+
 	logger.Debug("url stats page queried",
 		zap.Int("total", result.Total),
+		zap.String("service", filter.Service),
 	)
 	data.Result = result
 	data.build(result)
@@ -849,7 +889,14 @@ func parseRelative(s string) (time.Duration, bool) {
 }
 
 // -------------------------------------------------------- URL 统计页数据结构 ----
-
+// urlStatsPageData 是 URL 统计页的完整渲染数据容器。
+//
+// 它把三层数据打包在一起：
+//  1. Filter —— 用户通过 URL query 传入的过滤条件（service / 时间范围）；
+//  2. Form —— 回填表单用的字符串版本，parseTimeFlexible 把 "1h" 变成绝对时间后，
+//     StartRaw 保留用户原始输入，这样提交失败时用户看到的还是 "1h" 而不是一串数字；
+//  3. Rows —— build() 把 model.URLStatRow 转成带展示格式的 urlStatsRow，
+//     模板里直接用 .AvgDuration 就能出 "1.2s"，避免模板里做 fmt。
 type urlStatsPageData struct {
 	Title   string
 	Error   string
@@ -863,6 +910,7 @@ type urlStatsPageData struct {
 	PageSizeOptions []int
 }
 
+// urlStatsFilterForm 是 URLStatsFilter 的字符串版本，专门给 <input> 回填用。
 type urlStatsFilterForm struct {
 	Service  string
 	Start    string
@@ -871,6 +919,8 @@ type urlStatsFilterForm struct {
 	EndRaw   string
 }
 
+// urlStatsRow 是模板直接消费的展示行，所有耗时/时间字段都提前格式化成字符串。
+// ErrorRate 在这里计算是因为模板里不方便做浮点除法。
 type urlStatsRow struct {
 	Service     string
 	URL         string
@@ -889,6 +939,12 @@ func (d *urlStatsPageData) withError(msg string) *urlStatsPageData {
 	return d
 }
 
+// build 把数据库层的 URLStatRow 转成模板友好的 urlStatsRow。
+//
+// 这里做了几件事：
+//   - ErrorRate = ErrorCount / CallCount * 100，空结果时为 "" 避免显示 "0.0%"；
+//   - URLShort 把超长 URL 截断到 80 字符，鼠标悬停时 title 里仍能看完整 URL；
+//   - AvgDuration / MaxDuration / LastTime 用 view 包统一格式化，保持全站一致。
 func (d *urlStatsPageData) build(result *model.URLStatsResult) {
 	d.Rows = make([]urlStatsRow, 0, len(result.Rows))
 	for i := range result.Rows {
@@ -912,7 +968,8 @@ func (d *urlStatsPageData) build(result *model.URLStatsResult) {
 	}
 }
 
-// filterValues 把 URL 统计过滤条件序列化为查询串。
+// filterValues 把 Form 里的过滤条件序列化为 url.Values，用于拼接 HTML 里的链接。
+// 只在非空时才写入 query string，保证链接尽量短（例如没填 service 就不出现 service=）。
 func (d *urlStatsPageData) filterValues() url.Values {
 	v := url.Values{}
 	if d.Form.Service != "" {
@@ -927,7 +984,9 @@ func (d *urlStatsPageData) filterValues() url.Values {
 	return v
 }
 
-// QuickURL 生成快捷时间范围链接。
+// QuickURL 生成快捷时间范围按钮的链接。
+// 用法 {{ .QuickURL "1h" }} / {{ .QuickURL "24h" }} / {{ .QuickURL }}（重置）。
+// 注意：调用 QuickURL 时传入的是相对时长（"1h"），后端 parseTimeFlexible 会把它换算成绝对时间。
 func (d *urlStatsPageData) QuickURL(args ...string) template.URL {
 	if len(args) == 0 {
 		return template.URL("/url-stats")
@@ -939,13 +998,20 @@ func (d *urlStatsPageData) QuickURL(args ...string) template.URL {
 	return template.URL("/url-stats?" + v.Encode())
 }
 
-// PageURL 生成指定参数的链接。
+// PageURL 生成当前过滤条件对应的完整链接。
 func (d *urlStatsPageData) PageURL() template.URL {
 	return template.URL("/url-stats?" + d.filterValues().Encode())
 }
 
 // ------------------------------------------------------------------ URL 统计参数解析 ----
 
+// parseURLStatsFilter 从 URL query 里提取 URLStatsFilter。
+//
+// 支持的时间格式由 parseTimeFlexible 统一处理（见 trace_controller.go 里的 parseTimeFlexible 注释）：
+//   - 绝对时间：2026-01-02 15:04:05 / RFC3339
+//   - 相对时长：1h / 30m / 7d  （从"现在"往前推）
+//
+// 解析失败直接返回 error，让调用方决定渲染 400 页面还是返回 400 JSON。
 func parseURLStatsFilter(q url.Values) (model.URLStatsFilter, error) {
 	f := model.URLStatsFilter{
 		Service: strings.TrimSpace(q.Get("service")),

@@ -49,6 +49,7 @@ type TraceService interface {
 	ReportEvents(events []model.TraceEvent, meta ReportMeta) error
 	GetTrace(traceID string) (*model.Trace, []model.TraceEvent, error)
 	ListTraces(filter model.TraceFilter) (*model.TraceListResult, error)
+	// ListURLStats 按 service+url 聚合调用次数、错误数、耗时等。用于"接口调用统计"页。
 	ListURLStats(filter model.URLStatsFilter) (*model.URLStatsResult, error)
 	Stats() TraceStats
 	Shutdown()
@@ -268,11 +269,28 @@ func (s *traceService) ListTraces(filter model.TraceFilter) (*model.TraceListRes
 	}, nil
 }
 
+// ListURLStats 按 service+url 维度聚合所有链路的调用统计。
+//
+// Service 层本身不做任何数据加工 —— 聚合逻辑完全下沉到 repository 的 SQL，
+// 这里只负责把 filter 透传给 repo，然后把结果包装成 URLStatsResult 返回。
+// 这么薄的一层不是冗余：如果以后要加缓存、按租户隔离、或从多条数据源聚合，
+// service 就是最佳插入点。
 func (s *traceService) ListURLStats(filter model.URLStatsFilter) (*model.URLStatsResult, error) {
+	logger.Debug("trace service ListURLStats called",
+		zap.String("service", filter.Service),
+		zap.Time("start_time", filter.StartTime),
+		zap.Time("end_time", filter.EndTime),
+	)
+
 	rows, err := s.repo.ListURLStats(filter)
 	if err != nil {
 		return nil, err
 	}
+
+	logger.Debug("trace service ListURLStats got rows",
+		zap.Int("count", len(rows)),
+		zap.String("service", filter.Service),
+	)
 
 	return &model.URLStatsResult{
 		Rows:      rows,

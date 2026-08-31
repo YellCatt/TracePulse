@@ -132,9 +132,10 @@ func (r *traceRepository) ListTraces(filter model.TraceFilter) ([]model.Trace, i
 // ListURLStats 按 URL 分组统计调用次数、错误数、耗时等。
 //
 // 实现要点：
-//  1. 一个 trace_id 算一次调用（GROUP BY url 即可）；
-//  2. 支持按 service_name 过滤，也支持时间范围过滤；
-//  3. 结果按调用次数倒序，热点 URL 排在前面。
+//  1. 一个 trace_id 算一次调用（GROUP BY service_name, url 即可）；
+//  2. 只统计 url 非空的链路 —— 纯内部链路没上报业务入口，统计出来没有意义；
+//  3. COALESCE 包裹所有聚合列，避免空结果集扫出来 NULL 被 GORM 映射成零值；
+//  4. 结果按 call_count DESC 排序，热点 URL 自然排在最前，排查时一眼看到高频接口。
 func (r *traceRepository) ListURLStats(filter model.URLStatsFilter) ([]model.URLStatRow, error) {
 	var rows []model.URLStatRow
 
@@ -152,6 +153,7 @@ func (r *traceRepository) ListURLStats(filter model.URLStatsFilter) ([]model.URL
 		Group("service_name, url").
 		Order("call_count DESC")
 
+	// 三种过滤条件按需拼接。GORM 的条件是延迟求值的，Where 链的顺序不影响 SQL 语义。
 	if filter.Service != "" {
 		q = q.Where("service_name = ?", filter.Service)
 	}
@@ -162,16 +164,30 @@ func (r *traceRepository) ListURLStats(filter model.URLStatsFilter) ([]model.URL
 		q = q.Where("start_time <= ?", filter.EndTime)
 	}
 
+	// Debug 级别把完整 SQL 和绑定参数打出来，方便排查"为什么没数据"或"为什么多了数据"。
+	logger.Debug("list url stats building query",
+		zap.String("service", filter.Service),
+		zap.Time("start_time", filter.StartTime),
+		zap.Time("end_time", filter.EndTime),
+		zap.String("sql", q.Statement.SQL.String()),
+		zap.Any("vars", q.Statement.Vars),
+	)
+
 	err := q.Scan(&rows).Error
 	if err != nil {
 		logger.Error("list url stats failed",
-			zap.String("service", filter.Service), zap.Error(err))
+			zap.String("service", filter.Service),
+			zap.Time("start_time", filter.StartTime),
+			zap.Time("end_time", filter.EndTime),
+			zap.Error(err))
 		return nil, err
 	}
 
 	logger.Debug("url stats queried",
 		zap.Int("count", len(rows)),
 		zap.String("service", filter.Service),
+		zap.Time("start_time", filter.StartTime),
+		zap.Time("end_time", filter.EndTime),
 	)
 	return rows, nil
 }
