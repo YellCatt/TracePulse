@@ -20,8 +20,8 @@ on:
           - '-1'
 
 env:
-  # UPX 发行版版本，升级时只需改这里
   UPX_VERSION: '4.2.4'
+  TZ: Asia/Shanghai
 
 jobs:
   build:
@@ -113,9 +113,8 @@ jobs:
     - name: Build for ${{ matrix.target.os }}/${{ matrix.target.arch }}
       run: |
         OUTPUT_FILE="tracepulse_${{ matrix.target.suffix }}${{ matrix.target.os == 'windows' && '.exe' || '' }}"
-        # 版本号格式：<短 commit>-<UTC 构建时间>，注入 main.version 供启动时打印。
         SHORT_SHA=$(git rev-parse --short=7 HEAD)
-        BUILD_TIME=$(date -u +'%Y%m%d-%H%M%S')
+        BUILD_TIME=$(date +'%Y%m%d-%H%M%S')
         VERSION="${SHORT_SHA}-${BUILD_TIME}"
         echo "building version: $VERSION"
         ${{ matrix.target.goflags }} go build -tags netgo -ldflags="${{ matrix.target.ldflags }} -X main.version=${VERSION}" -o "$OUTPUT_FILE"
