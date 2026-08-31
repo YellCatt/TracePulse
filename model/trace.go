@@ -2,7 +2,9 @@ package model
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -291,15 +293,67 @@ type URLStatsFilter struct {
 	EndTime   time.Time `form:"end_time" json:"end_time"`
 }
 
+// FlexTime 是一个能兼容多种数据库驱动返回类型的时间字段。
+//
+// SQLite 的聚合函数（如 MAX(start_time)）返回的是 TEXT 原始值而非 time.Time，
+// 直接用 time.Time 做 Scan 目标会报 "unsupported Scan, storing driver.Value
+// type string into type *time.Time"。FlexTime 通过实现 sql.Scanner 同时兼容
+// time.Time / string / []byte / nil 四种输入，内嵌 time.Time 保证 JSON 序列化
+// 和方法调用的行为与原生 time.Time 完全一致。
+type FlexTime struct {
+	time.Time
+}
+
+func (f *FlexTime) Scan(value interface{}) error {
+	if value == nil {
+		f.Time = time.Time{}
+		return nil
+	}
+	switch v := value.(type) {
+	case time.Time:
+		f.Time = v
+		return nil
+	case string:
+		return f.parseString(v)
+	case []byte:
+		return f.parseString(string(v))
+	default:
+		return fmt.Errorf("FlexTime.Scan: unsupported type %T", value)
+	}
+}
+
+func (f *FlexTime) parseString(s string) error {
+	if s == "" {
+		f.Time = time.Time{}
+		return nil
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999",
+		"2006-01-02 15:04:05",
+	}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			f.Time = t
+			return nil
+		}
+	}
+	return fmt.Errorf("FlexTime.Scan: cannot parse %q as time", s)
+}
+
+var _ sql.Scanner = (*FlexTime)(nil)
+
 // URLStatRow 单条 URL 统计结果。
 type URLStatRow struct {
-	Service     string    `json:"service"`
-	URL         string    `json:"url"`
-	CallCount   int64     `json:"call_count"`
-	ErrorCount  int64     `json:"error_count"`
-	AvgDuration int64     `json:"avg_duration_ms"`
-	MaxDuration int64     `json:"max_duration_ms"`
-	LastTime    time.Time `json:"last_time"`
+	Service     string   `json:"service"`
+	URL         string   `json:"url"`
+	CallCount   int64    `json:"call_count"`
+	ErrorCount  int64    `json:"error_count"`
+	AvgDuration int64    `json:"avg_duration_ms"`
+	MaxDuration int64    `json:"max_duration_ms"`
+	LastTime    FlexTime `json:"last_time"`
 }
 
 // URLStatsResult URL 统计列表响应。

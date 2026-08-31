@@ -962,7 +962,7 @@ func (d *urlStatsPageData) build(result *model.URLStatsResult) {
 			ErrorRate:   errRate,
 			AvgDuration: view.FormatDuration(r.AvgDuration),
 			MaxDuration: view.FormatDuration(r.MaxDuration),
-			LastTime:    view.FormatTime(r.LastTime),
+			LastTime:    view.FormatTime(r.LastTime.Time),
 			HasError:    r.ErrorCount > 0,
 		})
 	}
